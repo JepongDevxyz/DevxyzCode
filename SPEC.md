@@ -214,3 +214,7 @@ exact local file via the GitHub web UI instead of describing edits.
 - **Privacy:** PRIVACY.md in the repo root (keys encrypted on-device, requests only to the chosen provider, no analytics/ads/tracking, no account/server) + a privacy note in Settings → About. For the Play Store listing, the policy URL is the PRIVACY.md file on GitHub.
 - **First-run safety (audited):** Files shows "No folder opened yet" with an Open button; Agent shows the empty-state hero; Settings has sane defaults. Nothing crashes on a fresh install.
 - **Still open for a real Play Store release (needs her decision):** a signed release build (AAB/APK) needs a release keystore + GitHub secrets for CI signing, and the workflow file must be updated to build `bundleRelease` — the workflow edit goes through the GitHub web UI (the API cannot touch workflows). The debug APK in this version is still fine for direct distribution.
+
+## v3.6.1 — Status-bar fix (2026-11-17, her phone screenshot of v3.6.0 onboarding)
+- **Root cause:** the onboarding screen is shown WITHOUT a Scaffold, so it never got the system-bar insets. On targetSdk 35 the system draws edge-to-edge by default, so the "DevxyzCode" title rendered half-hidden behind the status bar.
+- **Fix:** OnboardingScreen's Column now uses `.statusBarsPadding().navigationBarsPadding()` (imports added). The main app was already fine — its Scaffold applies the insets. No other screen is shown outside a Scaffold.
