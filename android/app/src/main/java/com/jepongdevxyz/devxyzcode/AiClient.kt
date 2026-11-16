@@ -44,7 +44,7 @@ object AiClient {
         history: List<ChatMessage>,
         systemPrompt: String
     ): String = withContext(Dispatchers.IO) {
-        val cleanBase = baseUrl.trim().trimEnd('/')
+        val cleanBase = baseUrl.trimEnd('/')
         val url = URL("$cleanBase/chat/completions")
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -80,5 +80,11 @@ object AiClient {
         val end = reply.indexOf("```", afterFirst + 1)
         if (end < 0) return null
         return reply.substring(afterFirst + 1, end).trimEnd()
+    }
+
+    /** First ```sh / ```bash / ```shell fenced block in a reply, without the fences. Null when none. */
+    fun extractShellBlock(reply: String): String? {
+        val regex = Regex("```(?:sh|bash|shell)\\s*(.*?)```", RegexOption.DOT_MATCHES_ALL)
+        return regex.find(reply)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
     }
 }
