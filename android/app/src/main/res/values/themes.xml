@@ -5,4 +5,13 @@
         <item name="android:statusBarColor">#0B1220</item>
         <item name="android:navigationBarColor">#0B1220</item>
     </style>
+
+    <!-- v2.1: launch (splash) theme — dark navy, cyan </> mark, no white flash. -->
+    <style name="Theme.DevxyzCode.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/devxyz_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/devxyz_bg</item>
+        <item name="windowSplashScreenAnimationDuration">1000</item>
+        <item name="postSplashScreenTheme">@style/Theme.DevxyzCode</item>
+    </style>
 </resources>
