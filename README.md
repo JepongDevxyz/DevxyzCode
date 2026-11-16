@@ -36,6 +36,7 @@ Cursor / OpenCode / OpenClaw / Hermes / Harness, sa Devxyz branding.
 - Codex UI + approval modes (v3.5): Suggest (default, tap-gate) at Auto (isang file, diretso sa editor — Save pa rin ang magsusulat sa disk); mode switch sa Agent header at sa Settings, working indicator na may pangalan ng model, monospace diff headers
 - Public release (v3.6): first-run onboarding (welcome → provider setup → project folder, lahat puwedeng i-skip), public defaults (walang personal na repo na naka-default), at PRIVACY.md para sa Play Store
 - Status-bar fix (v3.6.1): hindi na lumalampas ang onboarding sa notification status bar (statusBarsPadding + navigationBarsPadding)
+- Usable, like theirs (v3.7.0): hindi na naka-lock ang onboarding (malaking Skip sa bawat step), no-key banner sa Agent na may one-tap papuntang Settings, at Stop button kapag nag-hang ang reply
 
 **Ano ang HINDI pa rin niya ginagawa — by design:**
 - Hindi siya nagpapatakbo ng shell commands o builds nang mag-isa (Terminal tab lang, ikaw ang magta-tap ng Run), at hindi siya nagsusulat ng files nang hindi mo ina-approve
