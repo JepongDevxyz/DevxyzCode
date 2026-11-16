@@ -26,7 +26,13 @@ private val DevxyzLight = lightColorScheme(
 )
 
 @Composable
-fun DevxyzCodeTheme(content: @Composable () -> Unit) {
-    val scheme = if (isSystemInDarkTheme()) DevxyzDark else DevxyzLight
+fun DevxyzCodeTheme(themeMode: String = "system", content: @Composable () -> Unit) {
+    // v3.4: "system" follows the phone, "dark"/"light" force one mode.
+    val dark = when (themeMode) {
+        "dark" -> true
+        "light" -> false
+        else -> isSystemInDarkTheme()
+    }
+    val scheme = if (dark) DevxyzDark else DevxyzLight
     MaterialTheme(colorScheme = scheme, content = content)
 }

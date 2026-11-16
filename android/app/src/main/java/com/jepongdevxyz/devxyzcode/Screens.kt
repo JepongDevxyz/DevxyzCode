@@ -5,6 +5,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -37,6 +39,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.snapshots.SnapshotStateMap
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -47,6 +50,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +72,7 @@ private val SYSTEM_PROMPT_BASE =
         "fenced block so the user can tap Run in Terminal (a separate tab, never in this chat). " +
         "Keep answers short first, then the code."
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AgentScreen(
     modifier: Modifier = Modifier,
@@ -133,7 +138,11 @@ fun AgentScreen(
         )
         Spacer(Modifier.height(8.dp))
         // v3: parallel sessions — each is its own subagent-lite conversation.
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        // v3.4: FlowRow — chips wrap to the next line instead of squishing.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
             sessionTitles.forEach { title ->
                 OutlinedButton(onClick = { onSelectSession(title) }) {
                     Text(if (title == currentSessionTitle) "● $title" else title, fontSize = 11.sp)
@@ -145,7 +154,12 @@ fun AgentScreen(
             }
         }
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // v3.4: FlowRow — the model chips wrap (her screenshot showed
+        // "Kimi K3" squished into one vertical letter per line).
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             models.forEach { m ->
                 OutlinedButton(onClick = { onModelChange(m) }) {
                     Text(if (m == model) "● $m" else m, fontSize = 11.sp)
@@ -165,7 +179,15 @@ fun AgentScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("Attached: ${file.relativePath}", fontSize = 13.sp)
+                            // v3.4: a long path takes the free width and
+                            // ellipsizes instead of pushing "Remove" off-screen.
+                            Text(
+                                "Attached: ${file.relativePath}",
+                                fontSize = 13.sp,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                             TextButton(onClick = { onClearAttachment(file) }) { Text("Remove") }
                         }
                     }
@@ -335,6 +357,33 @@ fun AgentScreen(
             }
         }
         Spacer(Modifier.height(8.dp))
+        // v3.4: Cursor / AI Studio style empty state — a hero + suggestion
+        // chips instead of a big blank area. Tapping a chip fills the input.
+        if (history.isEmpty() && !thinking) {
+            Column(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("What do you want to build?", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Ask the Agent to fix, explain, or build code — or attach a screenshot.",
+                    fontSize = 13.sp
+                )
+                Spacer(Modifier.height(12.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("Fix a bug in my code", "Build a new screen", "Explain this code").forEach { suggestion ->
+                        OutlinedButton(onClick = { input = suggestion }) {
+                            Text(suggestion, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        } else {
         LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(history) { msg ->
                 Card(modifier = Modifier.fillMaxWidth()) {
@@ -349,7 +398,12 @@ fun AgentScreen(
                             val block = AiClient.extractCodeBlock(msg.content)
                             val shell = AiClient.extractShellBlock(msg.content)
                             val named = AiClient.extractNamedCodeBlocks(msg.content)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // v3.4: FlowRow — five action buttons in one Row
+                            // overflowed on narrow phones; they wrap now.
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
                                 TextButton(onClick = {
                                     clipboard.setText(AnnotatedString(msg.content))
                                 }) { Text("Copy reply") }
@@ -408,6 +462,7 @@ fun AgentScreen(
             if (thinking) {
                 item { CircularProgressIndicator() }
             }
+        }
         }
         if (error.isNotEmpty()) {
             Text(error, fontSize = 13.sp)
@@ -756,6 +811,7 @@ fun AnnounceScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FilesScreen(
     modifier: Modifier = Modifier,
@@ -850,7 +906,11 @@ fun FilesScreen(
             )
             if (suggestions.isNotEmpty()) {
                 Spacer(Modifier.height(4.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                // v3.4: FlowRow — suggestion chips wrap instead of squishing.
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     suggestions.forEach { suggestion ->
                         OutlinedButton(onClick = {
                             val text = editorValue.text
@@ -865,7 +925,12 @@ fun FilesScreen(
                 Text("Autocomplete: words from this file + keywords. Tap one to insert it.", fontSize = 12.sp)
             }
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // v3.4: FlowRow — Save / Attach / Highlight / Check wrapped off
+            // the screen on narrow phones; they wrap to a second line now.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Button(onClick = onSave) { Text(if (editorDirty) "Save *" else "Save") }
                 OutlinedButton(onClick = onAttachToAgent) { Text("Attach to Agent") }
                 OutlinedButton(onClick = { showHighlight = !showHighlight }) {
@@ -1384,9 +1449,12 @@ fun MessagesScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     modifier: Modifier = Modifier,
+    themeMode: String,
+    onThemeModeChange: (String) -> Unit,
     baseUrl: String,
     onBaseChange: (String) -> Unit,
     apiKey: String,
@@ -1409,8 +1477,29 @@ fun SettingsScreen(
         Text("Settings", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text("Bring your own key (BYOK). No API key is built into DevxyzCode.", fontSize = 13.sp)
         Spacer(Modifier.height(12.dp))
+        // v3.4: Appearance — Cursor / Antigravity style theme picker.
+        // System follows the phone; Dark / Light force one mode.
+        Text("Appearance", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf("system" to "System", "dark" to "Dark", "light" to "Light").forEach { (value, label) ->
+                OutlinedButton(onClick = { onThemeModeChange(value) }) {
+                    Text(if (themeMode == value) "● $label" else label, fontSize = 12.sp)
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Text("Provider & Model", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
         Text("Provider preset", fontWeight = FontWeight.Bold)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // v3.4: FlowRow — preset chips wrap instead of squishing.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             OutlinedButton(onClick = {
                 onBaseChange(AiClient.DEFAULT_BASE_URL)
                 onModelChange(AiClient.DEFAULT_MODELS[0])
@@ -1456,7 +1545,7 @@ fun SettingsScreen(
             }
         }
         Spacer(Modifier.height(12.dp))
-        Text("GitHub (Announce tab)", fontWeight = FontWeight.Bold)
+        Text("GitHub (Announce tab)", fontSize = 15.sp, fontWeight = FontWeight.Bold)
         Text("Personal Access Token with repo scope, for posting Issues and Releases from the Announce tab. The token is stored encrypted on this device. Create one at github.com → Settings → Developer settings → Personal access tokens.", fontSize = 13.sp)
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
@@ -1474,7 +1563,7 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(12.dp))
-        Text("Telegram bot (Messages tab)", fontWeight = FontWeight.Bold)
+        Text("Telegram bot (Messages tab)", fontSize = 15.sp, fontWeight = FontWeight.Bold)
         Text("Create a bot with @BotFather on Telegram and paste its token here. The token is stored encrypted on this device.", fontSize = 13.sp)
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
@@ -1485,6 +1574,8 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(12.dp))
+        Text("Agent", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -1511,19 +1602,21 @@ fun SettingsScreen(
             Text(saved, fontSize = 13.sp)
         }
         Spacer(Modifier.height(16.dp))
-        Text("DevxyzCode v3.3.0", fontWeight = FontWeight.Bold)
+        Text("DevxyzCode v3.4.0", fontWeight = FontWeight.Bold)
         Text("Package com.jepongdevxyz.devxyzcode · minSdk 26 · targetSdk 35", fontSize = 13.sp)
         Text(
-            "What v3.3 adds (AI Studio + Antigravity capabilities, her order): a multi-file Agent plan — " +
-                "the AI answers with one ```lang:path block per file, you review each diff, then one tap " +
-                "on Apply all writes them (new files are created in the picked project folder, so a whole " +
-                "new app can be scaffolded from one prompt); and vision — attach an image and a Gemini " +
-                "model reads it with your prompt. The tap-gate stays: nothing is written or run without " +
-                "your tap, and the sandboxed Terminal still cannot see the SAF project folder, so " +
-                "validation is opening the changed files in Files/editor, not a terminal build. " +
-                "What v3.3 still does NOT do: run gradle / npm / node / python / git on the phone (those " +
-                "binaries do not exist on a phone), full LSP servers, or WhatsApp control. Every change " +
-                "still needs your tap, except scheduled tasks you created yourself.",
+            "What v3.4 adds (professional UI, her order — a blend of Claude Code / Cursor / " +
+                "OpenCode / OpenClaw / Harness / Hermes / Antigravity / AI Studio): every chip row " +
+                "that squished or overlapped now wraps (FlowRow) — model chips, session chips, " +
+                "message actions, editor toolbar, autocomplete suggestions, provider presets — so " +
+                "nothing renders one letter per line; the bottom tab bar is now a scrollable pill " +
+                "bar with single-line labels that never wrap; the Agent has a Cursor / AI Studio " +
+                "style empty state with suggestion chips; and Settings is organized into sections " +
+                "(Appearance with a System / Dark / Light theme picker, Provider & Model, GitHub, " +
+                "Telegram, Agent, About). The tap-gate stays: nothing is written or run without " +
+                "your tap. What v3.4 still does NOT do: run gradle / npm / node / python / git on " +
+                "the phone (those binaries do not exist on a phone), full LSP servers, or WhatsApp " +
+                "control. Every change still needs your tap, except scheduled tasks you created yourself.",
             fontSize = 13.sp
         )
     }

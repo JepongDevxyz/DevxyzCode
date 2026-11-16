@@ -14,7 +14,18 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Chat
@@ -25,10 +36,15 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -70,15 +86,64 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         setContent {
-            DevxyzCodeTheme {
-                DevxyzCodeApp()
+            // v3.4: theme lives here so the whole app re-themes on change.
+            var themeMode by remember { mutableStateOf(SettingsStore.loadThemeMode(this)) }
+            DevxyzCodeTheme(themeMode) {
+                DevxyzCodeApp(
+                    themeMode = themeMode,
+                    onThemeModeChange = {
+                        themeMode = it
+                        SettingsStore.saveThemeMode(this, it)
+                    }
+                )
+            }
+        }
+    }
+}
+
+/** v3.4: scrollable bottom tab bar (Cursor / Antigravity activity-bar style).
+ * The old NavigationBar squeezed 8 tabs into the width and wrapped every
+ * label ("Age nt", "Setti ngs" on her screenshot). Each tab here is a pill
+ * with a single-line label that never wraps; the bar scrolls if needed. */
+@Composable
+private fun BottomTabBar(
+    tabs: List<String>,
+    tabIcons: List<ImageVector>,
+    tab: Int,
+    onTabChange: (Int) -> Unit
+) {
+    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
+        Row(
+            modifier = Modifier.fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 4.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            tabs.forEachIndexed { index, label ->
+                val selected = tab == index
+                val bg = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                else Color.Transparent
+                val fg = if (selected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                TextButton(
+                    onClick = { onTabChange(index) },
+                    modifier = Modifier.background(bg, RoundedCornerShape(20.dp)),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Icon(tabIcons[index], contentDescription = label, tint = fg, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(label, fontSize = 12.sp, maxLines = 1, color = fg)
+                }
             }
         }
     }
 }
 
 @Composable
-fun DevxyzCodeApp() {
+fun DevxyzCodeApp(
+    themeMode: String,
+    onThemeModeChange: (String) -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tab by remember { mutableStateOf(0) }
@@ -221,16 +286,7 @@ fun DevxyzCodeApp() {
 
     Scaffold(
         bottomBar = {
-            NavigationBar {
-                tabs.forEachIndexed { index, label ->
-                    NavigationBarItem(
-                        selected = tab == index,
-                        onClick = { tab = index },
-                        icon = { Icon(tabIcons[index], contentDescription = label) },
-                        label = { Text(label) }
-                    )
-                }
-            }
+            BottomTabBar(tabs = tabs, tabIcons = tabIcons, tab = tab, onTabChange = { tab = it })
         }
     ) { innerPadding ->
         when (tab) {
@@ -561,6 +617,8 @@ fun DevxyzCodeApp() {
             )
             else -> SettingsScreen(
                 modifier = Modifier.padding(innerPadding),
+                themeMode = themeMode,
+                onThemeModeChange = onThemeModeChange,
                 baseUrl = baseUrl,
                 onBaseChange = { baseUrl = it },
                 apiKey = apiKey,

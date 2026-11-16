@@ -253,6 +253,18 @@ object SettingsStore {
     private const val KEY_API = "api_key"
     private const val KEY_MODEL = "model"
     private const val KEY_RUNS = "runs"
+    private const val KEY_THEME = "theme_mode"
+
+    /** v3.4: "system" (follows the phone), "dark", or "light". */
+    fun loadThemeMode(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_THEME, "system") ?: "system"
+
+    fun saveThemeMode(context: Context, mode: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_THEME, mode)
+            .apply()
+    }
 
     fun loadBase(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
