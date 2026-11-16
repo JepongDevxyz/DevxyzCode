@@ -161,3 +161,32 @@ exact local file via the GitHub web UI instead of describing edits.
 4. Verify the APK (aapt badging: package, version, minSdk; zip sha vs GitHub
    digest) and deliver via muse.ai link with expiry. Her phone test is the
    final verdict — only her phone makes it 100%.
+
+## v3.2.0 — GitHub Announce + Connect (2026-11-16, her order "Kaya din dapat mag anonsa GitHub" / "Mag connect")
+
+- New **Announce tab** (tab 6, megaphone icon; Settings moves to tab 7): post an **Issue** or
+  publish a **Release** in any repo she can access, via the GitHub REST API
+  (`GitHubClient.kt`, org.json, no new dependencies).
+- **Connect GitHub** button: verifies the token live (`GET /user`) and shows
+  "Connected as @username". Auth is her own Personal Access Token (repo scope),
+  entered in Settings and stored encrypted — never hardcoded, never sent anywhere
+  except api.github.com. Nothing is posted without her tap.
+- **AI Draft** button writes the announcement from the title (same BYOK model as chat).
+- Release needs a tag (e.g. v3.2.0); Issue needs title + body. Result shows the posted
+  URL, or the exact GitHub error (e.g. 401 Bad credentials, 404 repo not found).
+- versionCode 7 / versionName "3.2.0". Push via browser (exact local files, signed in as
+  JepongDevxyz) after the v3.1.1 APK is delivered; CI run "Build DevxyzCode Android" →
+  artifact `DevxyzCode-debug-apk`, verify + muse.ai link as usual.
+
+- **AI Studio preset (same v3.2.0, her order "Isama mo na aistudio"):** Google AI Studio
+  (Gemini API) as a third provider preset — base
+  `https://generativelanguage.googleapis.com/v1beta/openai` (OpenAI-compatible,
+  verified 2026-11-16), models gemini-3.8-flash / gemini-3.6-flash /
+  gemini-3.5-flash / gemini-3.1-pro, key from aistudio.google.com/apikey (BYOK,
+  encrypted; paste detection also accepts GEMINI_API_KEY=). Model list follows
+  the provider, same as Coarena.
+- **Antigravity (her order, checked 2026-11-16): NOT added as a provider — it has
+  NO public API** (its models are only reachable through the Antigravity IDE/CLI
+  with a Google account + subscription, via an undocumented internal endpoint).
+  No hacky internal-endpoint integration was built. Its agent-first coding is
+  what DevxyzCode's multi-session Agent + Terminal + diff preview already do.

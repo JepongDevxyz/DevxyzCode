@@ -29,6 +29,8 @@ Cursor / OpenCode / OpenClaw / Hermes / Harness, sa Devxyz branding.
 - Diff preview bago mag-Apply: makikita mo muna ang +/− lines, Approve o Discard — ikaw pa rin ang magta-tap ng Save
 - Skills (OpenClaw-style, reusable instructions) + Save-as-Skill mula sa reply, at persistent Memory (Hermes-style, laging kasama sa chat)
 - Scheduled tasks (OpenClaw Automations) at Harness-style pipeline steps na may evidence-based run records
+- Announce tab (v3.2): mag-connect sa GitHub gamit ang sariling Personal Access Token (naka-encrypt), tapos mag-post ng Issue o mag-publish ng Release sa kahit anong repo — may AI Draft pa ng announcement text. Walang pino-post nang hindi mo tina-tap
+- AI Studio preset (v3.2): Google Gemini API (aistudio.google.com/apikey) — gemini-3.8-flash at iba pa, BYOK din. Antigravity: walang public API kaya hindi siya puwedeng idagdag bilang provider; yung agent-style coding niya, ginagawa na ng Agent tab
 
 **Ano ang HINDI pa rin niya ginagawa — by design:**
 - Hindi siya nagpapatakbo ng shell commands o builds nang mag-isa (Terminal tab lang, ikaw ang magta-tap ng Run), at hindi siya nagsusulat ng files nang hindi mo ina-approve
