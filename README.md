@@ -3,6 +3,15 @@
 Sariling AI coding assistant ni Jepong for Android — parang Claude Code /
 Cursor / OpenCode / OpenClaw / Hermes / Harness, sa Devxyz branding.
 
+**v3.0.0 — ano ang nadagdag (lahat ng kaya):**
+- Autocomplete sa editor (words mula sa file + keywords), on-device diagnostics + find-symbol
+- Multi-session Agent (parallel, may sariling history bawat session), background scheduled tasks na may notification + saved result, Telegram bot gateway (AI draft, ikaw pa rin ang magta-tap ng Send), auto-save ng applied code bilang Skill (default OFF)
+
+**Hindi pa rin kaya — at bakit:**
+- Shell/builds sa phone mismo: walang JDK / Android SDK sa phone, at walang executable path ang SAF folders
+- Full LSP server: same reason; diagnostics-lite + find-symbol ang kaya
+- WhatsApp control: walang official personal-account API
+
 **v2.1.0 — ano ang nadagdag:**
 - Branded app icon (cyan `</>` sa dark navy) at branded splash screen — walang white flash pag bukas
 
