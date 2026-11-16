@@ -13,6 +13,7 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Mail
 import androidx.compose.material.icons.filled.PlayArrow
@@ -41,7 +42,6 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        // v2.1: show the branded splash screen, then switch to the app theme.
         installSplashScreen()
         super.onCreate(savedInstanceState)
         setContent {
@@ -57,15 +57,11 @@ fun DevxyzCodeApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tab by remember { mutableStateOf(0) }
-
     var baseUrl by remember { mutableStateOf(SettingsStore.loadBase(context)) }
     var apiKey by remember { mutableStateOf(SettingsStore.loadApiKey(context)) }
     var model by remember { mutableStateOf(SettingsStore.loadModel(context)) }
     var botToken by remember { mutableStateOf(SettingsStore.loadBotToken(context)) }
     var autoSaveSkills by remember { mutableStateOf(SettingsStore.loadAutoSaveSkills(context)) }
-
-    // v3: multi-session Agent — each session has its own history (parallel
-    // subagent-lite: switch sessions while another one is still thinking).
     val savedSessions = remember { SettingsStore.loadSessions(context) }
     val sessionTitles = remember {
         mutableStateListOf<SessionRecord>().apply {
@@ -87,7 +83,9 @@ fun DevxyzCodeApp() {
         }
     }
     var currentSessionId by remember { mutableStateOf(sessionTitles.first().id) }
-    fun currentHistory() = histories.getOrPut(currentSessionId) { mutableStateListOf() }
+    fun currentHistory(): androidx.compose.runtime.snapshots.SnapshotStateList<ChatMessage> =
+        histories.getOrPut(currentSessionId) { mutableStateListOf() }
+
     fun persistSessions() {
         SettingsStore.saveSessions(
             context,
@@ -102,10 +100,8 @@ fun DevxyzCodeApp() {
     }
 
     var thinking by remember { mutableStateOf(false) }
-    // v2: attach up to 3 files as context, not just one.
     val attachedFiles = remember { mutableStateListOf<ProjectFile>() }
     val attachedContents = remember { mutableStateMapOf<String, String>() }
-
     var treeUriString by remember { mutableStateOf("") }
     val projectFiles = remember { mutableStateListOf<ProjectFile>() }
     var fileQuery by remember { mutableStateOf("") }
@@ -113,70 +109,99 @@ fun DevxyzCodeApp() {
     var editorText by remember { mutableStateOf("") }
     var editorDirty by remember { mutableStateOf(false) }
     var editorStatus by remember { mutableStateOf("") }
-
+    // v3: run records (Harness-style, evidence-based).
     val runs = remember { mutableStateListOf<RunRecord>().apply { addAll(SettingsStore.loadRuns(context)) } }
-
-    // v2 (OpenClaw + Hermes): Skills, persistent Memory, Scheduled tasks.
+    // v3: skills (OpenClaw-style) + memory (Hermes-style) + scheduled tasks.
     val skills = remember { mutableStateListOf<SkillRecord>().apply { addAll(SettingsStore.loadSkills(context)) } }
     val memoryFacts = remember { mutableStateListOf<MemoryFact>().apply { addAll(SettingsStore.loadMemory(context)) } }
     val scheduledTasks = remember { mutableStateListOf<ScheduledTask>().apply { addAll(SettingsStore.loadTasks(context)) } }
     val selectedSkills = remember { mutableStateListOf<String>() }
-
     // v3: Telegram messages + scheduled-task results (incl. background runs).
     val telegramMessages = remember { mutableStateListOf<TelegramMessage>().apply { addAll(SettingsStore.loadTelegramMessages(context)) } }
     val taskResults = remember { mutableStateListOf<TaskResult>().apply { addAll(SettingsStore.loadTaskResults(context)) } }
+    // v3.1: sandboxed terminal (separate tab, never in chat).
+    val terminalLines = remember { mutableStateListOf<String>() }
+    var terminalRunning by remember { mutableStateOf(false) }
 
-    // v3: notification permission (Android 13+) + background worker (once).
+    fun runTerminalCommand(command: String) {
+        val trimmed = command.trim()
+        if (trimmed.isBlank() || terminalRunning) return
+        terminalLines.add("$ $trimmed")
+        terminalRunning = true
+        scope.launch {
+            val result = ShellRunner.run(trimmed, context.filesDir)
+            terminalLines.add(result.output)
+            terminalLines.add("[exit ${result.exitCode}]")
+            while (terminalLines.size > 400) terminalLines.removeAt(0)
+            terminalRunning = false
+        }
+    }
+
     val notifPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* Result is best-effort; results are still saved in-app. */ }
+    ) { }
+
     LaunchedEffect(Unit) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
         TaskWorker.enqueue(context)
     }
 
-    val tabs = listOf("Agent", "Files", "Runs", "Skills", "Messages", "Settings")
+    // v3.1: model list follows the provider (Coarena vs APInex defaults).
+    val models = remember(baseUrl) { ProviderSetup.modelsFor(baseUrl) }
+
+    val tabs = listOf("Agent", "Files", "Runs", "Skills", "Messages", "Terminal", "Settings")
     val tabIcons = listOf(
         Icons.Filled.Chat,
         Icons.Filled.Folder,
         Icons.Filled.PlayArrow,
         Icons.Filled.Star,
         Icons.Filled.Mail,
+        Icons.Filled.Code,
         Icons.Filled.Settings
     )
-
     Scaffold(
         bottomBar = {
             NavigationBar {
-                tabs.forEachIndexed { index, label ->
+                tabs.forEachIndexed { i, label ->
                     NavigationBarItem(
-                        selected = tab == index,
-                        onClick = { tab = index },
-                        icon = { Icon(tabIcons[index], contentDescription = label) },
+                        selected = tab == i,
+                        onClick = { tab = i },
+                        icon = { Icon(tabIcons[i], contentDescription = label) },
                         label = { Text(label) }
                     )
                 }
             }
         }
-    ) { innerPadding ->
+    ) { padding ->
         when (tab) {
             0 -> AgentScreen(
-                modifier = Modifier.padding(innerPadding),
+                modifier = Modifier.padding(padding),
                 history = currentHistory(),
                 thinking = thinking,
                 onThinking = { thinking = it },
                 baseUrl = baseUrl,
                 apiKey = apiKey,
                 model = model,
+                models = models,
                 onModelChange = {
                     model = it
                     SettingsStore.save(context, baseUrl, apiKey, it)
                 },
+                onApplyProviderSetup = { setupBase, setupKey, setupModel ->
+                    baseUrl = setupBase
+                    apiKey = setupKey
+                    if (!setupModel.isNullOrBlank()) model = setupModel
+                    SettingsStore.save(context, baseUrl, apiKey, model)
+                },
+                onRunInTerminal = { command -> runTerminalCommand(command); tab = 5 },
                 attachedFiles = attachedFiles,
                 attachedContents = attachedContents,
                 onClearAttachment = { file ->
@@ -191,185 +216,148 @@ fun DevxyzCodeApp() {
                 openFile = openFile,
                 skills = skills,
                 selectedSkills = selectedSkills,
-                onToggleSkill = { name ->
-                    if (selectedSkills.contains(name)) selectedSkills.remove(name)
-                    else selectedSkills.add(name)
+                onToggleSkill = { title ->
+                    if (selectedSkills.contains(title)) selectedSkills.remove(title)
+                    else selectedSkills.add(title)
                 },
                 memoryFacts = memoryFacts,
-                onSaveAsSkill = { name, instructions ->
-                    skills.add(SkillRecord(name, "Saved from a chat reply", instructions))
-                    SettingsStore.saveSkills(context, skills.toList())
+                onSaveAsSkill = { title, content ->
+                    skills.add(SkillRecord(title = title, content = content))
+                    SettingsStore.saveSkills(context, skills)
                 },
                 autoSaveSkills = autoSaveSkills,
                 sessionTitles = sessionTitles.map { it.title },
-                currentSessionTitle = sessionTitles.firstOrNull { it.id == currentSessionId }?.title ?: "Session 1",
+                currentSessionTitle = sessionTitles.firstOrNull { it.id == currentSessionId }?.title ?: "",
                 onNewSession = {
                     val id = "s${System.currentTimeMillis()}"
-                    sessionTitles.add(SessionRecord(id = id, title = "Session ${sessionTitles.size + 1}"))
+                    val title = "Session ${sessionTitles.size + 1}"
+                    sessionTitles.add(SessionRecord(id = id, title = title))
                     histories[id] = mutableStateListOf()
                     currentSessionId = id
                     persistSessions()
                 },
                 onSelectSession = { title ->
-                    sessionTitles.firstOrNull { it.title == title }?.let {
-                        currentSessionId = it.id
-                    }
+                    sessionTitles.firstOrNull { it.title == title }?.let { currentSessionId = it.id }
                 },
-                onDeleteSession = {
-                    if (sessionTitles.size > 1) {
-                        val current = sessionTitles.firstOrNull { it.id == currentSessionId }
-                        if (current != null) {
-                            sessionTitles.remove(current)
-                            histories.remove(current.id)
-                            currentSessionId = sessionTitles.first().id
-                            persistSessions()
-                        }
+                onDeleteSession = { title ->
+                    if (sessionTitles.size <= 1) return@AgentScreen
+                    val removed = sessionTitles.firstOrNull { it.title == title } ?: return@AgentScreen
+                    val idx = sessionTitles.indexOf(removed)
+                    sessionTitles.remove(removed)
+                    histories.remove(removed.id)
+                    if (currentSessionId == removed.id) {
+                        currentSessionId = sessionTitles.getOrElse((idx - 1).coerceAtLeast(0)) { sessionTitles.first() }.id
                     }
+                    persistSessions()
                 },
                 onHistoryChanged = { persistSessions() },
                 onApplyCode = { code ->
-                    editorText = code
-                    editorDirty = true
-                    editorStatus = "Code applied to editor — tap Save in Files to write it."
+                    openFile?.let { file ->
+                        editorText = code
+                        editorDirty = true
+                        editorStatus = "AI code ready in ${file.name} — review then Save"
+                    } ?: run {
+                        editorText = code
+                        editorDirty = true
+                        editorStatus = "AI code ready — open a file to save it"
+                    }
                     tab = 1
                 }
             )
             1 -> FilesScreen(
-                modifier = Modifier.padding(innerPadding),
+                modifier = Modifier.padding(padding),
+                treeUriString = treeUriString,
+                onTreeUri = { treeUriString = it },
                 projectFiles = projectFiles,
                 fileQuery = fileQuery,
-                onQueryChange = { fileQuery = it },
-                treeUriString = treeUriString,
-                onFolderPicked = { uri ->
-                    treeUriString = uri.toString()
-                    ProjectStore.takePermission(context, uri)
-                    projectFiles.clear()
-                    projectFiles.addAll(ProjectStore.listFiles(context, uri))
-                },
+                onFileQuery = { fileQuery = it },
                 openFile = openFile,
                 onOpenFile = { file ->
                     openFile = file
-                    editorText = try {
-                        ProjectStore.readText(context, file.uriString)
-                    } catch (e: Exception) {
-                        "Could not open file: ${e.message}"
-                    }
+                    editorText = ProjectStore.readText(context, treeUriString, file)
                     editorDirty = false
                     editorStatus = ""
                 },
                 editorText = editorText,
-                onEditorChange = {
+                onEditorText = {
                     editorText = it
                     editorDirty = true
                 },
                 editorDirty = editorDirty,
                 editorStatus = editorStatus,
-                onSave = {
-                    val file = openFile
-                    if (file != null) {
+                onSaveFile = {
+                    openFile?.let { file ->
                         try {
-                            ProjectStore.writeText(context, file.uriString, editorText)
+                            ProjectStore.writeText(context, treeUriString, file, editorText)
                             editorDirty = false
-                            editorStatus = "Saved ${file.name}."
+                            editorStatus = "Saved ${file.name} ✓"
                         } catch (e: Exception) {
                             editorStatus = "Save failed: ${e.message}"
                         }
                     }
                 },
-                onAttachToAgent = {
-                    val file = openFile
-                    if (file != null && attachedFiles.size < 3 &&
-                        attachedFiles.none { it.uriString == file.uriString }
-                    ) {
-                        attachedFiles.add(file)
-                        attachedContents[file.relativePath] = editorText
-                        tab = 0
-                    } else if (file != null) {
-                        tab = 0
+                onAttachFiles = { files ->
+                    attachedFiles.clear()
+                    attachedFiles.addAll(files)
+                    attachedContents.clear()
+                    files.forEach { file ->
+                        attachedContents[file.relativePath] =
+                            ProjectStore.readText(context, treeUriString, file)
                     }
                 }
             )
             2 -> RunsScreen(
-                modifier = Modifier.padding(innerPadding),
+                modifier = Modifier.padding(padding),
                 runs = runs,
-                onAddRun = { record ->
-                    runs.add(0, record)
-                    SettingsStore.saveRuns(context, runs.toList())
-                },
                 scheduledTasks = scheduledTasks,
-                onAddTask = { task ->
-                    scheduledTasks.add(task)
-                    SettingsStore.saveTasks(context, scheduledTasks.toList())
-                },
-                onDeleteTask = { task ->
-                    scheduledTasks.remove(task)
-                    SettingsStore.saveTasks(context, scheduledTasks.toList())
-                },
-                onUpdateTask = { task ->
-                    val index = scheduledTasks.indexOfFirst { it.name == task.name && it.prompt == task.prompt }
-                    if (index >= 0) {
-                        scheduledTasks[index] = task
-                        SettingsStore.saveTasks(context, scheduledTasks.toList())
-                    }
-                },
                 taskResults = taskResults,
                 onRunTaskNow = { task ->
+                    val started = RunRecord(
+                        taskId = task.id,
+                        title = task.title,
+                        startedAt = System.currentTimeMillis(),
+                        status = "running"
+                    )
+                    runs.add(started)
+                    SettingsStore.saveRuns(context, runs)
                     scope.launch {
-                        val time = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date())
-                        try {
-                            val reply = AiClient.chat(
-                                baseUrl = baseUrl,
-                                apiKey = apiKey,
-                                model = model,
-                                history = listOf(ChatMessage("user", task.prompt)),
-                                systemPrompt = "You are DevxyzCode, a coding assistant. " +
-                                    "This is a scheduled task the user created: '${task.name}'. " +
-                                    "Answer in the user's language. Keep it short first, then the detail."
+                        val result = runTaskNow(context, task)
+                        val idx = runs.indexOf(started)
+                        val done = started.copy(
+                            status = result.status,
+                            output = result.output,
+                            finishedAt = System.currentTimeMillis()
+                        )
+                        if (idx >= 0) runs[idx] = done
+                        taskResults.add(
+                            TaskResult(
+                                taskId = task.id,
+                                title = task.title,
+                                time = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date()),
+                                status = result.status,
+                                output = result.output
                             )
-                            taskResults.add(0, TaskResult(task.name, reply.take(4000), time))
-                            SettingsStore.saveTaskResults(context, taskResults.toList().take(50))
-                            val updated = task.copy(lastRunAtMillis = System.currentTimeMillis())
-                            val index = scheduledTasks.indexOf(task)
-                            if (index >= 0) {
-                                scheduledTasks[index] = updated
-                                SettingsStore.saveTasks(context, scheduledTasks.toList())
-                            }
-                        } catch (e: Exception) {
-                            taskResults.add(0, TaskResult(task.name, "Error: ${e.message}", time))
-                            SettingsStore.saveTaskResults(context, taskResults.toList().take(50))
-                        }
+                        )
+                        SettingsStore.saveRuns(context, runs)
+                        SettingsStore.saveTaskResults(context, taskResults)
                     }
                 }
             )
             3 -> SkillsScreen(
-                modifier = Modifier.padding(innerPadding),
+                modifier = Modifier.padding(padding),
                 skills = skills,
-                selectedSkills = selectedSkills,
-                onToggleSkill = { name ->
-                    if (selectedSkills.contains(name)) selectedSkills.remove(name)
-                    else selectedSkills.add(name)
-                },
-                onAddSkill = { skill ->
-                    skills.add(skill)
-                    SettingsStore.saveSkills(context, skills.toList())
-                },
+                memoryFacts = memoryFacts,
                 onDeleteSkill = { skill ->
                     skills.remove(skill)
-                    selectedSkills.remove(skill.name)
-                    SettingsStore.saveSkills(context, skills.toList())
+                    SettingsStore.saveSkills(context, skills)
                 },
-                memoryFacts = memoryFacts,
-                onAddFact = { fact ->
-                    memoryFacts.add(fact)
-                    SettingsStore.saveMemory(context, memoryFacts.toList())
-                },
-                onDeleteFact = { fact ->
+                onDeleteMemory = { fact ->
                     memoryFacts.remove(fact)
-                    SettingsStore.saveMemory(context, memoryFacts.toList())
+                    SettingsStore.saveMemory(context, memoryFacts)
                 }
             )
             4 -> MessagesScreen(
-                modifier = Modifier.padding(innerPadding),
+                modifier = Modifier.padding(padding),
                 messages = telegramMessages,
                 botToken = botToken,
                 baseUrl = baseUrl,
@@ -378,43 +366,40 @@ fun DevxyzCodeApp() {
                 onRefresh = {
                     scope.launch {
                         if (botToken.isBlank()) return@launch
-                        try {
-                            val offset = SettingsStore.loadTelegramOffset(context)
-                            val (incoming, nextOffset) = TelegramClient.getUpdates(botToken, offset)
-                            if (incoming.isNotEmpty()) {
-                                incoming.forEach { msg ->
-                                    telegramMessages.add(
-                                        0,
-                                        TelegramMessage(msg.chatId, msg.from, msg.text, msg.time)
-                                    )
-                                }
-                                SettingsStore.saveTelegramMessages(context, telegramMessages.toList().take(100))
-                            }
-                            if (nextOffset != offset) SettingsStore.saveTelegramOffset(context, nextOffset)
-                        } catch (e: Exception) {
-                            // Refresh failure shows as an empty refresh; nothing is lost.
+                        val offset = SettingsStore.loadTelegramOffset(context)
+                        val (incoming, nextOffset) = TelegramClient.getUpdates(botToken, offset)
+                        if (incoming.isNotEmpty()) {
+                            telegramMessages.addAll(incoming)
+                            SettingsStore.saveTelegramMessages(context, telegramMessages.toList())
+                            SettingsStore.saveTelegramOffset(context, nextOffset)
                         }
                     }
                 }
             )
+            5 -> TerminalScreen(
+                modifier = Modifier.padding(padding),
+                lines = terminalLines,
+                running = terminalRunning,
+                onRun = { runTerminalCommand(it) },
+                onClear = { terminalLines.clear() }
+            )
             else -> SettingsScreen(
-                modifier = Modifier.padding(innerPadding),
+                modifier = Modifier.padding(padding),
                 baseUrl = baseUrl,
                 onBaseChange = { baseUrl = it },
                 apiKey = apiKey,
                 onApiKeyChange = { apiKey = it },
                 model = model,
+                models = models,
                 onModelChange = { model = it },
                 botToken = botToken,
                 onBotTokenChange = { botToken = it },
                 autoSaveSkills = autoSaveSkills,
-                onAutoSaveSkillsChange = {
-                    autoSaveSkills = it
-                    SettingsStore.saveAutoSaveSkills(context, it)
-                },
+                onAutoSaveSkillsChange = { autoSaveSkills = it },
                 onSave = {
                     SettingsStore.save(context, baseUrl, apiKey, model)
                     SettingsStore.saveBotToken(context, botToken)
+                    SettingsStore.saveAutoSaveSkills(context, autoSaveSkills)
                 }
             )
         }
