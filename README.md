@@ -3,7 +3,10 @@
 Sariling AI coding assistant ni Jepong for Android — parang Claude Code /
 Cursor / OpenCode / OpenClaw / Hermes / Harness, sa Devxyz branding.
 
-**v2.0.0 (the 100% release) — ano ang kaya niya:**
+**v2.1.0 — ano ang nadagdag:**
+- Branded app icon (cyan `</>` sa dark navy) at branded splash screen — walang white flash pag bukas
+
+**v2.0.0 — ano ang kaya niya:**
 - Buksan ang project folder, mag-browse + mag-search ng files, mag-edit + mag-save ng code, syntax-highlighted preview
 - Makipag-chat sa AI (BYOK — ikaw ang maglalagay ng API key sa Settings, naka-encrypt na)
 - I-attach ang hanggang 3 files bilang context
