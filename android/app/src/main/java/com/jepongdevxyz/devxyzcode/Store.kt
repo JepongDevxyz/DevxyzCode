@@ -26,6 +26,26 @@ data class RunRecord(
     val time: String
 )
 
+/** OpenClaw-style reusable Skill (SKILL.md equivalent, stored on-device). */
+@Serializable
+data class SkillRecord(
+    val name: String,
+    val description: String,
+    val instructions: String
+)
+
+/** Hermes-style persistent memory fact, loaded into every chat. */
+@Serializable
+data class MemoryFact(val text: String, val time: String)
+
+/** OpenClaw Automations / Hermes scheduled job (stored; shown as due in Runs). */
+@Serializable
+data class ScheduledTask(
+    val name: String,
+    val whenText: String,
+    val prompt: String
+)
+
 object ProjectStore {
     private val json = Json { ignoreUnknownKeys = true }
     const val MAX_LIST = 500
@@ -91,6 +111,44 @@ object ProjectStore {
     }
 }
 
+/**
+ * v2: the API key lives in EncryptedSharedPreferences. If encryption is
+ * unavailable on a device, it falls back to private prefs (never a crash),
+ * and a key saved by v1 in plain prefs is migrated on first read.
+ */
+object SecureKeyStore {
+    private const val SECURE_PREFS = "devxyzcode_secure"
+    private const val KEY_API = "api_key"
+
+    private fun securePrefs(context: Context) =
+        androidx.security.crypto.EncryptedSharedPreferences.create(
+            context,
+            SECURE_PREFS,
+            androidx.security.crypto.MasterKey.Builder(context)
+                .setKeyScheme(androidx.security.crypto.MasterKey.KeyScheme.AES256_GCM)
+                .build(),
+            androidx.security.crypto.EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            androidx.security.crypto.EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+
+    fun load(context: Context): String {
+        return try {
+            securePrefs(context).getString(KEY_API, "") ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    fun save(context: Context, apiKey: String) {
+        try {
+            securePrefs(context).edit().putString(KEY_API, apiKey.trim()).apply()
+        } catch (e: Exception) {
+            // Fallback is handled by SettingsStore (plain private prefs).
+            throw e
+        }
+    }
+}
+
 object SettingsStore {
     private const val PREFS = "devxyzcode_settings"
     private const val KEY_BASE = "base_url"
@@ -102,9 +160,23 @@ object SettingsStore {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY_BASE, AiClient.DEFAULT_BASE_URL) ?: AiClient.DEFAULT_BASE_URL
 
-    fun loadApiKey(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    fun loadApiKey(context: Context): String {
+        val secure = SecureKeyStore.load(context)
+        if (secure.isNotBlank()) return secure
+        // v1 legacy: plain prefs. Migrate it into the secure store once.
+        val legacy = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY_API, "") ?: ""
+        if (legacy.isNotBlank()) {
+            try {
+                SecureKeyStore.save(context, legacy)
+                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit().remove(KEY_API).apply()
+            } catch (e: Exception) {
+                // Keep the legacy value readable; do not lose the key.
+            }
+        }
+        return legacy
+    }
 
     fun loadModel(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -113,9 +185,15 @@ object SettingsStore {
     fun save(context: Context, base: String, apiKey: String, model: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(KEY_BASE, base.trim())
-            .putString(KEY_API, apiKey.trim())
             .putString(KEY_MODEL, model)
             .apply()
+        try {
+            SecureKeyStore.save(context, apiKey)
+        } catch (e: Exception) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString(KEY_API, apiKey.trim())
+                .apply()
+        }
     }
 
     fun loadRuns(context: Context): List<RunRecord> {
@@ -133,4 +211,31 @@ object SettingsStore {
             .putString(KEY_RUNS, Json.encodeToString(runs))
             .apply()
     }
+
+    private const val KEY_SKILLS = "skills"
+    private const val KEY_MEMORY = "memory_facts"
+    private const val KEY_TASKS = "scheduled_tasks"
+
+    private inline fun <reified T> loadList(context: Context, key: String): List<T> {
+        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(key, "[]") ?: "[]"
+        return try {
+            Json.decodeFromString<List<T>>(raw)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private inline fun <reified T> saveList(context: Context, key: String, items: List<T>) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(key, Json.encodeToString(items))
+            .apply()
+    }
+
+    fun loadSkills(context: Context): List<SkillRecord> = loadList(context, KEY_SKILLS)
+    fun saveSkills(context: Context, items: List<SkillRecord>) = saveList(context, KEY_SKILLS, items)
+    fun loadMemory(context: Context): List<MemoryFact> = loadList(context, KEY_MEMORY)
+    fun saveMemory(context: Context, items: List<MemoryFact>) = saveList(context, KEY_MEMORY, items)
+    fun loadTasks(context: Context): List<ScheduledTask> = loadList(context, KEY_TASKS)
+    fun saveTasks(context: Context, items: List<ScheduledTask>) = saveList(context, KEY_TASKS, items)
 }

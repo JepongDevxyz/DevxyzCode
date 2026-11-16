@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -17,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -45,8 +47,9 @@ fun DevxyzCodeApp() {
 
     val history = remember { mutableStateListOf<ChatMessage>() }
     var thinking by remember { mutableStateOf(false) }
-    var attachedFile by remember { mutableStateOf<ProjectFile?>(null) }
-    var attachedContent by remember { mutableStateOf("") }
+    // v2: attach up to 3 files as context, not just one.
+    val attachedFiles = remember { mutableStateListOf<ProjectFile>() }
+    val attachedContents = remember { mutableStateMapOf<String, String>() }
 
     var treeUriString by remember { mutableStateOf("") }
     val projectFiles = remember { mutableStateListOf<ProjectFile>() }
@@ -58,11 +61,18 @@ fun DevxyzCodeApp() {
 
     val runs = remember { mutableStateListOf<RunRecord>().apply { addAll(SettingsStore.loadRuns(context)) } }
 
-    val tabs = listOf("Agent", "Files", "Runs", "Settings")
+    // v2 (OpenClaw + Hermes): Skills, persistent Memory, Scheduled tasks.
+    val skills = remember { mutableStateListOf<SkillRecord>().apply { addAll(SettingsStore.loadSkills(context)) } }
+    val memoryFacts = remember { mutableStateListOf<MemoryFact>().apply { addAll(SettingsStore.loadMemory(context)) } }
+    val scheduledTasks = remember { mutableStateListOf<ScheduledTask>().apply { addAll(SettingsStore.loadTasks(context)) } }
+    val selectedSkills = remember { mutableStateListOf<String>() }
+
+    val tabs = listOf("Agent", "Files", "Runs", "Skills", "Settings")
     val tabIcons = listOf(
         Icons.Filled.Chat,
         Icons.Filled.Folder,
         Icons.Filled.PlayArrow,
+        Icons.Filled.Star,
         Icons.Filled.Settings
     )
 
@@ -93,13 +103,29 @@ fun DevxyzCodeApp() {
                     model = it
                     SettingsStore.save(context, baseUrl, apiKey, it)
                 },
-                attachedFile = attachedFile,
-                attachedContent = attachedContent,
-                onClearAttachment = {
-                    attachedFile = null
-                    attachedContent = ""
+                attachedFiles = attachedFiles,
+                attachedContents = attachedContents,
+                onClearAttachment = { file ->
+                    attachedFiles.remove(file)
+                    attachedContents.remove(file.relativePath)
                 },
+                onClearAllAttachments = {
+                    attachedFiles.clear()
+                    attachedContents.clear()
+                },
+                editorText = editorText,
                 openFile = openFile,
+                skills = skills,
+                selectedSkills = selectedSkills,
+                onToggleSkill = { name ->
+                    if (selectedSkills.contains(name)) selectedSkills.remove(name)
+                    else selectedSkills.add(name)
+                },
+                memoryFacts = memoryFacts,
+                onSaveAsSkill = { name, instructions ->
+                    skills.add(SkillRecord(name, "Saved from a chat reply", instructions))
+                    SettingsStore.saveSkills(context, skills.toList())
+                },
                 onApplyCode = { code ->
                     editorText = code
                     editorDirty = true
@@ -151,9 +177,13 @@ fun DevxyzCodeApp() {
                 },
                 onAttachToAgent = {
                     val file = openFile
-                    if (file != null) {
-                        attachedFile = file
-                        attachedContent = editorText
+                    if (file != null && attachedFiles.size < 3 &&
+                        attachedFiles.none { it.uriString == file.uriString }
+                    ) {
+                        attachedFiles.add(file)
+                        attachedContents[file.relativePath] = editorText
+                        tab = 0
+                    } else if (file != null) {
                         tab = 0
                     }
                 }
@@ -164,6 +194,42 @@ fun DevxyzCodeApp() {
                 onAddRun = { record ->
                     runs.add(0, record)
                     SettingsStore.saveRuns(context, runs.toList())
+                },
+                scheduledTasks = scheduledTasks,
+                onAddTask = { task ->
+                    scheduledTasks.add(task)
+                    SettingsStore.saveTasks(context, scheduledTasks.toList())
+                },
+                onDeleteTask = { task ->
+                    scheduledTasks.remove(task)
+                    SettingsStore.saveTasks(context, scheduledTasks.toList())
+                }
+            )
+            3 -> SkillsScreen(
+                modifier = Modifier.padding(innerPadding),
+                skills = skills,
+                selectedSkills = selectedSkills,
+                onToggleSkill = { name ->
+                    if (selectedSkills.contains(name)) selectedSkills.remove(name)
+                    else selectedSkills.add(name)
+                },
+                onAddSkill = { skill ->
+                    skills.add(skill)
+                    SettingsStore.saveSkills(context, skills.toList())
+                },
+                onDeleteSkill = { skill ->
+                    skills.remove(skill)
+                    selectedSkills.remove(skill.name)
+                    SettingsStore.saveSkills(context, skills.toList())
+                },
+                memoryFacts = memoryFacts,
+                onAddFact = { fact ->
+                    memoryFacts.add(fact)
+                    SettingsStore.saveMemory(context, memoryFacts.toList())
+                },
+                onDeleteFact = { fact ->
+                    memoryFacts.remove(fact)
+                    SettingsStore.saveMemory(context, memoryFacts.toList())
                 }
             )
             else -> SettingsScreen(
