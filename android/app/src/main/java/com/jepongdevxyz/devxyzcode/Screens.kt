@@ -1507,6 +1507,144 @@ fun MessagesScreen(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
+fun OnboardingScreen(
+    modifier: Modifier = Modifier,
+    baseUrl: String,
+    onBaseChange: (String) -> Unit,
+    apiKey: String,
+    onApiKeyChange: (String) -> Unit,
+    model: String,
+    onModelChange: (String) -> Unit,
+    onFolderPicked: (Uri) -> Unit,
+    onFinish: () -> Unit
+) {
+    // v3.6: first-run onboarding for the public release — welcome, then
+    // provider setup (BYOK), then an optional project folder. Every step
+    // can be skipped; nothing is forced, and no key ever leaves the device.
+    var step by remember { mutableStateOf(0) }
+    var error by remember { mutableStateOf("") }
+    var folderPicked by remember { mutableStateOf(false) }
+    val folderLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            onFolderPicked(uri)
+            folderPicked = true
+        }
+    }
+    Column(modifier = modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState())) {
+        Text("DevxyzCode", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Text("Your AI coding app — pure coding, on your phone.", fontSize = 14.sp)
+        Spacer(Modifier.height(24.dp))
+        when (step) {
+            0 -> {
+                Text("Welcome", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Chat with an AI that writes code, reviews diffs, and helps you build apps — " +
+                        "right from your phone. You bring your own API key (BYOK): the app has no " +
+                        "key built in, and your key stays encrypted on this device.",
+                    fontSize = 14.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Nothing is written or run without your tap. The AI proposes; you approve.",
+                    fontSize = 14.sp
+                )
+                Spacer(Modifier.height(24.dp))
+                Button(onClick = { step = 1 }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Get started")
+                }
+            }
+            1 -> {
+                Text("Step 1 of 2 — Your AI provider", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                Text("Pick a provider, paste your key, and you're set. You can change this anytime in Settings.", fontSize = 14.sp)
+                Spacer(Modifier.height(12.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(onClick = {
+                        onBaseChange(AiClient.DEFAULT_BASE_URL)
+                        onModelChange(AiClient.DEFAULT_MODELS[0])
+                    }) { Text(if (baseUrl.contains("apinex.bond")) "● APInex" else "APInex", fontSize = 12.sp) }
+                    OutlinedButton(onClick = {
+                        onBaseChange(ProviderSetup.COARENA_BASE_URL)
+                        onModelChange(ProviderSetup.COARENA_MODELS[0])
+                    }) { Text(if (baseUrl.contains("coarena.ai")) "● Coarena" else "Coarena", fontSize = 12.sp) }
+                    OutlinedButton(onClick = {
+                        onBaseChange(ProviderSetup.AISTUDIO_BASE_URL)
+                        onModelChange(ProviderSetup.AISTUDIO_MODELS[0])
+                    }) { Text(if (baseUrl.contains("generativelanguage.googleapis.com")) "● AI Studio" else "AI Studio", fontSize = 12.sp) }
+                }
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = baseUrl,
+                    onValueChange = onBaseChange,
+                    label = { Text("API base URL (OpenAI-compatible)") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = apiKey,
+                    onValueChange = onApiKeyChange,
+                    label = { Text("API key") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = model,
+                    onValueChange = onModelChange,
+                    label = { Text("Model ID") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (error.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(error, fontSize = 13.sp)
+                }
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = {
+                        if (apiKey.isBlank()) {
+                            error = "Paste your API key first — or tap Skip for now and add it later in Settings."
+                        } else {
+                            error = ""
+                            step = 2
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Save & continue") }
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = { step = 2 }) { Text("Skip for now") }
+            }
+            else -> {
+                Text("Step 2 of 2 — Project folder (optional)", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Pick the folder with your code so the Agent can open, edit, and save files there. " +
+                        "You can also pick one later from the Files tab.",
+                    fontSize = 14.sp
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = { folderLauncher.launch(null) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(if (folderPicked) "Folder picked ✓ — pick a different one" else "Pick a project folder") }
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onFinish, modifier = Modifier.fillMaxWidth()) {
+                    Text("Finish — open DevxyzCode")
+                }
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = onFinish) { Text("Skip") }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
 fun SettingsScreen(
     modifier: Modifier = Modifier,
     themeMode: String,
@@ -1682,22 +1820,22 @@ fun SettingsScreen(
             Text(saved, fontSize = 13.sp)
         }
         Spacer(Modifier.height(16.dp))
-        Text("DevxyzCode v3.5.0", fontWeight = FontWeight.Bold)
+        Text("DevxyzCode v3.6.0", fontWeight = FontWeight.Bold)
         Text("Package com.jepongdevxyz.devxyzcode · minSdk 26 · targetSdk 35", fontSize = 13.sp)
         Text(
-            "What v3.5 adds (Codex UI + capabilities, her order): Codex-style approval modes — " +
-                "Suggest (default, the tap-gate: Preview diff / Show plan, then Apply) and Auto " +
-                "(single-file code goes straight to the editor, no tab switch — you still tap Save " +
-                "in Files to write it). The mode switch sits in the Agent header like Codex's, and " +
-                "in Settings → Agent. The working indicator now names the model (\"Working with " +
-                "Gemini 3.8 Flash…\"), and plan diff headers are monospace like Codex's. What Codex " +
-                "already had here: agent coding, diff review, terminal, multi-session, GitHub posting. " +
-                "What v3.5 deliberately does NOT copy: Codex's full-auto disk writes and cloud " +
-                "sandbox environments — disk writes always need your tap (her tap-gate rule), and a " +
-                "phone has no cloud sandbox. What v3.5 still does NOT do: run gradle / npm / node / " +
-                "python / git on the phone (those binaries do not exist on a phone), full LSP servers, " +
-                "or WhatsApp control. Every change still needs your tap, except scheduled tasks you " +
-                "created yourself.",
+            "Privacy: your API key, Telegram token, and GitHub token stay encrypted on this device " +
+                "and are only sent to the provider / API you chose. No analytics, no ads, no tracking. " +
+                "Full policy: PRIVACY.md in the repo (github.com/JepongDevxyz/DevxyzCode).",
+            fontSize = 13.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "What v3.6 adds (public release, her order): first-run onboarding — welcome, provider " +
+                "setup (BYOK), optional project folder, every step skippable — so a new user is never " +
+                "stuck on a blank screen; and public defaults (the announce repo no longer defaults " +
+                "to her own repo). What v3.6 still does NOT do: run gradle / npm / node / python / git " +
+                "on the phone (those binaries do not exist on a phone), full LSP servers, or WhatsApp " +
+                "control. Every change still needs your tap, except scheduled tasks you created yourself.",
             fontSize = 13.sp
         )
     }

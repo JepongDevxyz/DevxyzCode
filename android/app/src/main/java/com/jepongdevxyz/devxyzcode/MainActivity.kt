@@ -275,6 +275,12 @@ fun DevxyzCodeApp(
         TaskWorker.enqueue(context)
     }
 
+    // v3.6: first-run onboarding for the public release. Anyone who already
+    // has an API key saved skips it automatically (existing users included).
+    var onboardingDone by remember {
+        mutableStateOf(SettingsStore.loadOnboardingDone(context) || apiKey.isNotBlank())
+    }
+
     val tabs = listOf("Agent", "Files", "Runs", "Skills", "Messages", "Terminal", "Announce", "Settings")
     val tabIcons = listOf(
         Icons.Filled.Chat,
@@ -287,6 +293,27 @@ fun DevxyzCodeApp(
         Icons.Filled.Settings
     )
 
+    if (!onboardingDone) {
+        OnboardingScreen(
+            baseUrl = baseUrl,
+            onBaseChange = { baseUrl = it },
+            apiKey = apiKey,
+            onApiKeyChange = { apiKey = it },
+            model = model,
+            onModelChange = { model = it },
+            onFolderPicked = { uri ->
+                treeUriString = uri.toString()
+                ProjectStore.takePermission(context, uri)
+                projectFiles.clear()
+                projectFiles.addAll(ProjectStore.listFiles(context, uri))
+            },
+            onFinish = {
+                SettingsStore.save(context, baseUrl, apiKey, model)
+                SettingsStore.saveOnboardingDone(context, true)
+                onboardingDone = true
+            }
+        )
+    } else {
     Scaffold(
         bottomBar = {
             BottomTabBar(tabs = tabs, tabIcons = tabIcons, tab = tab, onTabChange = { tab = it })
@@ -665,5 +692,6 @@ fun DevxyzCodeApp(
                 }
             )
         }
+    }
     }
 }

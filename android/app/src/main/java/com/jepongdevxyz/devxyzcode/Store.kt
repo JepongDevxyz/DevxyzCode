@@ -280,6 +280,21 @@ object SettingsStore {
             .apply()
     }
 
+    private const val KEY_ONBOARDING_DONE = "onboarding_done"
+
+    /** v3.6: first-run onboarding — false until the user finishes (or skips)
+     * the welcome flow. Existing users already have the flag unset, so they
+     * see onboarding once after updating; their saved keys are kept. */
+    fun loadOnboardingDone(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_ONBOARDING_DONE, false)
+
+    fun saveOnboardingDone(context: Context, done: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_ONBOARDING_DONE, done)
+            .apply()
+    }
+
     fun loadBase(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY_BASE, AiClient.DEFAULT_BASE_URL) ?: AiClient.DEFAULT_BASE_URL
@@ -425,8 +440,10 @@ object SettingsStore {
 
     fun loadAnnounceRepo(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_ANNOUNCE_REPO, "JepongDevxyz/DevxyzCode")
-            ?: "JepongDevxyz/DevxyzCode"
+            // v3.6: blank by default — the old default was her own repo,
+            // which must not ship as the default to public users.
+            .getString(KEY_ANNOUNCE_REPO, "")
+            ?: ""
 
     fun saveAnnounceRepo(context: Context, repo: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
