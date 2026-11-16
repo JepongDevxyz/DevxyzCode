@@ -13,8 +13,8 @@ android {
         applicationId = "com.jepongdevxyz.devxyzcode"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.0.0"
+        versionCode = 3
+        versionName = "2.1.0"
     }
 
     buildTypes {
@@ -56,6 +56,9 @@ dependencies {
 
     // v2: API key lives in EncryptedSharedPreferences, not plain prefs.
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
+    // v2.1: branded splash screen (Android 12+ SplashScreen API, backported).
+    implementation("androidx.core:core-splashscreen:1.0.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
