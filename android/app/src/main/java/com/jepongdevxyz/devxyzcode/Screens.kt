@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -1532,7 +1534,11 @@ fun OnboardingScreen(
             folderPicked = true
         }
     }
-    Column(modifier = modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState())) {
+    // v3.6.1: the Column must clear the status bar — on targetSdk 35 the
+    // system draws edge-to-edge, and this screen has no Scaffold to apply
+    // the system-bar insets (her phone screenshot showed the "DevxyzCode"
+    // title half-hidden behind the status bar). Same for the nav bar.
+    Column(modifier = modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(24.dp).verticalScroll(rememberScrollState())) {
         Text("DevxyzCode", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         Text("Your AI coding app — pure coding, on your phone.", fontSize = 14.sp)
         Spacer(Modifier.height(24.dp))
