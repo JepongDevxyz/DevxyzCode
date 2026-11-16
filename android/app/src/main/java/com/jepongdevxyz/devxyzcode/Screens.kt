@@ -3,8 +3,10 @@ package com.jepongdevxyz.devxyzcode
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Column
@@ -81,7 +83,6 @@ private val SYSTEM_PROMPT_BASE =
         "fenced block so the user can tap Run in Terminal (a separate tab, never in this chat). " +
         "Keep answers short first, then the code."
 
-@OptIn(ExperimentalLayoutApi::class)
 // v3.8: one /review finding — P0/P1/P2 with file:line, tappable to jump
 // to that line in the editor (Cursor Bugbot / Codex /review, phone-sized).
 data class ReviewFinding(val severity: String, val file: String, val line: Int, val text: String)
@@ -102,6 +103,7 @@ fun parseReviewFindings(reply: String): List<ReviewFinding> {
     }.take(30)
 }
 
+@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun AgentScreen(
     modifier: Modifier = Modifier,
@@ -969,6 +971,9 @@ fun AgentScreen(
                             val block = AiClient.extractCodeBlock(msg.content)
                             val shell = AiClient.extractShellBlock(msg.content)
                             val named = AiClient.extractNamedCodeBlocks(msg.content)
+                            // v3.8: in Plan/Ask mode there is nothing to
+                            // apply — code actions only exist in Suggest/Auto.
+                            val canApply = approvalMode == "suggest" || approvalMode == "auto"
                             // v3.4: FlowRow — five action buttons in one Row
                             // overflowed on narrow phones; they wrap now.
                             FlowRow(
@@ -982,9 +987,6 @@ fun AgentScreen(
                                     val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
                                     onSaveAsSkill("Skill $time", msg.content.take(2000))
                                 }) { Text("Save as Skill") }
-                                // v3.8: in Plan/Ask mode there is nothing to
-                                // apply — code actions only exist in Suggest/Auto.
-                                val canApply = approvalMode == "suggest" || approvalMode == "auto"
                                 if (canApply && block != null && openFile != null) {
                                     TextButton(onClick = {
                                         pendingCode = block
