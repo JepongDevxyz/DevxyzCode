@@ -149,6 +149,7 @@ object SecureKeyStore {
     private const val SECURE_PREFS = "devxyzcode_secure"
     private const val KEY_API = "api_key"
     private const val KEY_BOT = "telegram_bot_token"
+    private const val KEY_GITHUB = "github_token"
 
     private fun securePrefs(context: Context) =
         androidx.security.crypto.EncryptedSharedPreferences.create(
@@ -193,6 +194,25 @@ object SecureKeyStore {
         } catch (e: Exception) {
             context.getSharedPreferences("devxyzcode_settings", Context.MODE_PRIVATE).edit()
                 .putString("telegram_bot_token_plain", token.trim())
+                .apply()
+        }
+    }
+
+    /** v3.2: GitHub Personal Access Token (repo scope) for Announce. */
+    fun loadGithubToken(context: Context): String {
+        return try {
+            securePrefs(context).getString(KEY_GITHUB, "") ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    fun saveGithubToken(context: Context, token: String) {
+        try {
+            securePrefs(context).edit().putString(KEY_GITHUB, token.trim()).apply()
+        } catch (e: Exception) {
+            context.getSharedPreferences("devxyzcode_settings", Context.MODE_PRIVATE).edit()
+                .putString("github_token_plain", token.trim())
                 .apply()
         }
     }
@@ -331,6 +351,31 @@ object SettingsStore {
     fun saveAutoSaveSkills(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putBoolean(KEY_AUTO_SKILL, enabled)
+            .apply()
+    }
+
+    // v3.2: GitHub announce — token encrypted, repo is a plain setting.
+    private const val KEY_ANNOUNCE_REPO = "announce_repo"
+
+    fun loadGithubToken(context: Context): String {
+        val secure = SecureKeyStore.loadGithubToken(context)
+        if (secure.isNotBlank()) return secure
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString("github_token_plain", "") ?: ""
+    }
+
+    fun saveGithubToken(context: Context, token: String) {
+        SecureKeyStore.saveGithubToken(context, token)
+    }
+
+    fun loadAnnounceRepo(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_ANNOUNCE_REPO, "JepongDevxyz/DevxyzCode")
+            ?: "JepongDevxyz/DevxyzCode"
+
+    fun saveAnnounceRepo(context: Context, repo: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_ANNOUNCE_REPO, repo.trim())
             .apply()
     }
 }

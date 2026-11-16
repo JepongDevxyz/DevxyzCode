@@ -436,6 +436,187 @@ fun TerminalScreen(
 }
 
 @Composable
+fun AnnounceScreen(
+    modifier: Modifier = Modifier,
+    repo: String,
+    onRepoChange: (String) -> Unit,
+    githubToken: String,
+    baseUrl: String,
+    apiKey: String,
+    model: String
+) {
+    val scope = rememberCoroutineScope()
+    var postType by remember { mutableStateOf("Issue") }
+    var title by remember { mutableStateOf("") }
+    var tag by remember { mutableStateOf("") }
+    var body by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf("") }
+    var working by remember { mutableStateOf(false) }
+    var drafting by remember { mutableStateOf(false) }
+    var connectedAs by remember { mutableStateOf("") }
+    var connecting by remember { mutableStateOf(false) }
+    Column(modifier = modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
+        Text("Announce on GitHub", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text(
+            "Connect GitHub with your Personal Access Token (repo scope, in Settings — stored " +
+                "encrypted), then post an Issue or publish a Release in any repo you can access. " +
+                "Nothing is posted without your tap.",
+            fontSize = 13.sp
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = {
+                if (githubToken.isBlank()) {
+                    status = "Add your GitHub token in Settings first (Personal Access Token, repo scope)."
+                    return@OutlinedButton
+                }
+                connecting = true
+                status = ""
+                scope.launch {
+                    val result = GitHubClient.testConnection(githubToken)
+                    if (result.login != null) {
+                        connectedAs = result.login
+                        status = "Connected as @${result.login}"
+                    } else {
+                        connectedAs = ""
+                        status = result.error ?: "Connection failed."
+                    }
+                    connecting = false
+                }
+            },
+            enabled = !connecting && !working,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                if (connecting) "Connecting…"
+                else if (connectedAs.isNotBlank()) "Connected as @$connectedAs"
+                else "Connect GitHub"
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = repo,
+            onValueChange = onRepoChange,
+            label = { Text("Repo (owner/name)") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { postType = "Issue" }) {
+                Text(if (postType == "Issue") "● Issue" else "Issue", fontSize = 12.sp)
+            }
+            OutlinedButton(onClick = { postType = "Release" }) {
+                Text(if (postType == "Release") "● Release" else "Release", fontSize = 12.sp)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = title,
+            onValueChange = { title = it },
+            label = { Text("Title") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (postType == "Release") {
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = tag,
+                onValueChange = { tag = it },
+                label = { Text("Tag (e.g. v3.2.0)") },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = body,
+            onValueChange = { body = it },
+            label = { Text("Announcement text") },
+            modifier = Modifier.fillMaxWidth(),
+            maxLines = 10
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = {
+                    if (apiKey.isBlank()) {
+                        status = "Add your API key in Settings first to draft with AI."
+                        return@OutlinedButton
+                    }
+                    if (title.isBlank()) {
+                        status = "Write a title first — the AI drafts from it."
+                        return@OutlinedButton
+                    }
+                    drafting = true
+                    status = ""
+                    scope.launch {
+                        try {
+                            val draft = AiClient.chat(
+                                baseUrl = baseUrl,
+                                apiKey = apiKey,
+                                model = model,
+                                history = listOf(
+                                    ChatMessage(
+                                        "user",
+                                        "Draft a GitHub $postType announcement for repo $repo titled " +
+                                            "'$title'. Keep it short, clear, and in the user's language " +
+                                            "(Tagalog or English, match the title). Return only the " +
+                                            "announcement text, no extra commentary."
+                                    )
+                                ),
+                                systemPrompt = "You write short GitHub announcements."
+                            )
+                            body = draft.trim()
+                            status = "Draft ready — edit it, then tap Post."
+                        } catch (e: Exception) {
+                            status = "Draft failed: ${e.message}"
+                        } finally {
+                            drafting = false
+                        }
+                    }
+                },
+                enabled = !drafting && !working
+            ) { Text(if (drafting) "Drafting…" else "AI Draft") }
+            Button(
+                onClick = {
+                    if (githubToken.isBlank()) {
+                        status = "Add your GitHub token in Settings first (Personal Access Token, repo scope)."
+                        return@Button
+                    }
+                    if (repo.isBlank() || title.isBlank() || body.isBlank()) {
+                        status = "Repo, title, and announcement text are all required."
+                        return@Button
+                    }
+                    if (postType == "Release" && tag.isBlank()) {
+                        status = "A Release needs a tag (e.g. v3.2.0)."
+                        return@Button
+                    }
+                    working = true
+                    status = ""
+                    scope.launch {
+                        val result = if (postType == "Release") {
+                            GitHubClient.postRelease(repo.trim(), tag.trim(), title.trim(), body, githubToken)
+                        } else {
+                            GitHubClient.postIssue(repo.trim(), title.trim(), body, githubToken)
+                        }
+                        status = if (result.url != null) {
+                            "Posted: ${result.url}"
+                        } else {
+                            result.error ?: "Posting failed."
+                        }
+                        working = false
+                    }
+                },
+                enabled = !working && !drafting,
+                modifier = Modifier.weight(1f)
+            ) { Text(if (working) "Posting…" else "Post to GitHub") }
+        }
+        if (status.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text(status, fontSize = 13.sp)
+        }
+    }
+}
+
+@Composable
 fun FilesScreen(
     modifier: Modifier = Modifier,
     projectFiles: SnapshotStateList<ProjectFile>,
@@ -1075,6 +1256,10 @@ fun SettingsScreen(
     onModelChange: (String) -> Unit,
     botToken: String,
     onBotTokenChange: (String) -> Unit,
+    githubToken: String,
+    onGithubTokenChange: (String) -> Unit,
+    announceRepo: String,
+    onAnnounceRepoChange: (String) -> Unit,
     autoSaveSkills: Boolean,
     onAutoSaveSkillsChange: (Boolean) -> Unit,
     onSave: () -> Unit
@@ -1094,8 +1279,13 @@ fun SettingsScreen(
                 onBaseChange(ProviderSetup.COARENA_BASE_URL)
                 onModelChange(ProviderSetup.COARENA_MODELS[0])
             }) { Text(if (baseUrl.contains("coarena.ai")) "● Coarena" else "Coarena", fontSize = 12.sp) }
+            OutlinedButton(onClick = {
+                onBaseChange(ProviderSetup.AISTUDIO_BASE_URL)
+                onModelChange(ProviderSetup.AISTUDIO_MODELS[0])
+            }) { Text(if (baseUrl.contains("generativelanguage.googleapis.com")) "● AI Studio" else "AI Studio", fontSize = 12.sp) }
         }
         Text("Coarena: free $1/day shared across its free models (gpt-6-luna, gemini-3-8-flash, deepseek-v4-1-flash-1017); claude-fable-5 needs paid balance. Or paste Coarena's setup in the Agent chat and the app sets itself up.", fontSize = 13.sp)
+        Text("AI Studio: Google's Gemini API (aistudio.google.com/apikey for the key) — models gemini-3.8-flash, gemini-3.6-flash, gemini-3.5-flash, gemini-3.1-pro. Antigravity has no public API, so it cannot be added as a provider — its agent-style coding is what DevxyzCode's Agent already does.", fontSize = 13.sp)
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value = baseUrl,
@@ -1126,6 +1316,24 @@ fun SettingsScreen(
             }
         }
         Spacer(Modifier.height(12.dp))
+        Text("GitHub (Announce tab)", fontWeight = FontWeight.Bold)
+        Text("Personal Access Token with repo scope, for posting Issues and Releases from the Announce tab. The token is stored encrypted on this device. Create one at github.com → Settings → Developer settings → Personal access tokens.", fontSize = 13.sp)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = githubToken,
+            onValueChange = onGithubTokenChange,
+            label = { Text("GitHub Personal Access Token") },
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = announceRepo,
+            onValueChange = onAnnounceRepoChange,
+            label = { Text("Default announce repo (owner/name)") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(12.dp))
         Text("Telegram bot (Messages tab)", fontWeight = FontWeight.Bold)
         Text("Create a bot with @BotFather on Telegram and paste its token here. The token is stored encrypted on this device.", fontSize = 13.sp)
         Spacer(Modifier.height(8.dp))
@@ -1154,7 +1362,7 @@ fun SettingsScreen(
         Button(
             onClick = {
                 onSave()
-                saved = "Saved. Your key and bot token are stored encrypted on this device and are only sent to the base URL / Telegram API above."
+                saved = "Saved. Your keys and tokens are stored encrypted on this device and are only sent to the base URL / Telegram API / GitHub API above."
             },
             modifier = Modifier.fillMaxWidth()
         ) { Text("Save settings") }
@@ -1163,19 +1371,13 @@ fun SettingsScreen(
             Text(saved, fontSize = 13.sp)
         }
         Spacer(Modifier.height(16.dp))
-        Text("DevxyzCode v3.1.1", fontWeight = FontWeight.Bold)
+        Text("DevxyzCode v3.2.0", fontWeight = FontWeight.Bold)
         Text("Package com.jepongdevxyz.devxyzcode · minSdk 26 · targetSdk 35", fontSize = 13.sp)
         Text(
-            "What v3.1 adds: a separate Terminal tab (never inside the chat — her order) that runs " +
-                "sandboxed shell commands on the phone, with a 'Run in Terminal' button on the AI's ```sh " +
-                "blocks; and provider self-setup — paste a provider's setup snippet (e.g. Coarena's " +
-                "'Copy for your agent') in the Agent chat and the app detects the base URL + key + model " +
-                "and offers to apply it, plus a Coarena preset in Settings (free models gpt-6-luna, " +
-                "gemini-3-8-flash, deepseek-v4-1-flash-1017; claude-fable-5 needs paid balance). " +
-                "v3.1.1 repairs the v3.1.0 web push, which had overwritten build.gradle.kts with a stale " +
-                "copy (losing the splash-screen + WorkManager dependencies) and shipped an editor without " +
-                "the v3 autocomplete / diagnostics / find-symbol / highlight UI — all restored here. " +
-                "What v3.1 still does NOT do: run gradle / npm / node / python / git on the phone (those " +
+            "What v3.2 adds: an Announce tab that posts to GitHub — an Issue or a Release, in any " +
+                "repo, with your own Personal Access Token (repo scope, encrypted) and an AI Draft " +
+                "button that writes the announcement from your title. Nothing is posted without your tap. " +
+                "What v3.2 still does NOT do: run gradle / npm / node / python / git on the phone (those " +
                 "binaries do not exist on a phone), full LSP servers, or WhatsApp control. Every change " +
                 "still needs your tap, except scheduled tasks you created yourself.",
             fontSize = 13.sp

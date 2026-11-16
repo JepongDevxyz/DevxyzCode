@@ -12,6 +12,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Folder
@@ -64,6 +65,9 @@ fun DevxyzCodeApp() {
     var model by remember { mutableStateOf(SettingsStore.loadModel(context)) }
     var botToken by remember { mutableStateOf(SettingsStore.loadBotToken(context)) }
     var autoSaveSkills by remember { mutableStateOf(SettingsStore.loadAutoSaveSkills(context)) }
+    // v3.2: GitHub announce — PAT encrypted, repo is a plain setting.
+    var githubToken by remember { mutableStateOf(SettingsStore.loadGithubToken(context)) }
+    var announceRepo by remember { mutableStateOf(SettingsStore.loadAnnounceRepo(context)) }
 
     // v3.1: model list follows the provider (Coarena vs APInex).
     val models = remember(baseUrl) { ProviderSetup.modelsFor(baseUrl) }
@@ -165,7 +169,7 @@ fun DevxyzCodeApp() {
         TaskWorker.enqueue(context)
     }
 
-    val tabs = listOf("Agent", "Files", "Runs", "Skills", "Messages", "Terminal", "Settings")
+    val tabs = listOf("Agent", "Files", "Runs", "Skills", "Messages", "Terminal", "Announce", "Settings")
     val tabIcons = listOf(
         Icons.Filled.Chat,
         Icons.Filled.Folder,
@@ -173,6 +177,7 @@ fun DevxyzCodeApp() {
         Icons.Filled.Star,
         Icons.Filled.Mail,
         Icons.Filled.Code,
+        Icons.Filled.Campaign,
         Icons.Filled.Settings
     )
 
@@ -441,6 +446,18 @@ fun DevxyzCodeApp() {
                 onRun = { runTerminalCommand(it) },
                 onClear = { terminalLines.clear() }
             )
+            6 -> AnnounceScreen(
+                modifier = Modifier.padding(innerPadding),
+                repo = announceRepo,
+                onRepoChange = {
+                    announceRepo = it
+                    SettingsStore.saveAnnounceRepo(context, it)
+                },
+                githubToken = githubToken,
+                baseUrl = baseUrl,
+                apiKey = apiKey,
+                model = model
+            )
             else -> SettingsScreen(
                 modifier = Modifier.padding(innerPadding),
                 baseUrl = baseUrl,
@@ -452,6 +469,10 @@ fun DevxyzCodeApp() {
                 onModelChange = { model = it },
                 botToken = botToken,
                 onBotTokenChange = { botToken = it },
+                githubToken = githubToken,
+                onGithubTokenChange = { githubToken = it },
+                announceRepo = announceRepo,
+                onAnnounceRepoChange = { announceRepo = it },
                 autoSaveSkills = autoSaveSkills,
                 onAutoSaveSkillsChange = {
                     autoSaveSkills = it
@@ -460,6 +481,8 @@ fun DevxyzCodeApp() {
                 onSave = {
                     SettingsStore.save(context, baseUrl, apiKey, model)
                     SettingsStore.saveBotToken(context, botToken)
+                    SettingsStore.saveGithubToken(context, githubToken)
+                    SettingsStore.saveAnnounceRepo(context, announceRepo)
                 }
             )
         }
