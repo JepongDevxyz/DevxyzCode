@@ -55,7 +55,18 @@ data class ScheduledTask(
 data class SessionRecord(
     val id: String,
     val title: String,
-    val messages: List<ChatMessage> = emptyList()
+    val messages: List<ChatMessage> = emptyList(),
+    // v3.8: the session's approved Plan-mode plan, so it survives a reopen.
+    val plan: String = ""
+)
+
+/** v3.8: a file snapshot taken before an Apply writes anything — one-tap
+ * Restore (Cursor checkpoints / OpenCode /undo, minus git). [time] is a
+ * display string; [files] maps relative path → contents before the write. */
+@Serializable
+data class Checkpoint(
+    val time: String,
+    val files: Map<String, String> = emptyMap()
 )
 
 /** v3: a Telegram message received through the user's own bot. */
@@ -387,6 +398,24 @@ object SettingsStore {
 
     fun loadSessions(context: Context): List<SessionRecord> = loadList(context, KEY_SESSIONS)
     fun saveSessions(context: Context, items: List<SessionRecord>) = saveList(context, KEY_SESSIONS, items)
+
+    // v3.8: checkpoints (snapshot before Apply) + effort selector.
+    private const val KEY_CHECKPOINTS = "checkpoints"
+    private const val KEY_EFFORT = "effort_level"
+
+    fun loadCheckpoints(context: Context): List<Checkpoint> = loadList(context, KEY_CHECKPOINTS)
+    fun saveCheckpoints(context: Context, items: List<Checkpoint>) =
+        saveList(context, KEY_CHECKPOINTS, items.take(20))
+
+    fun loadEffort(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_EFFORT, "medium") ?: "medium"
+
+    fun saveEffort(context: Context, effort: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_EFFORT, effort)
+            .apply()
+    }
     fun loadTelegramMessages(context: Context): List<TelegramMessage> = loadList(context, KEY_TELEGRAM)
     fun saveTelegramMessages(context: Context, items: List<TelegramMessage>) = saveList(context, KEY_TELEGRAM, items)
     fun loadTaskResults(context: Context): List<TaskResult> = loadList(context, KEY_TASK_RESULTS)

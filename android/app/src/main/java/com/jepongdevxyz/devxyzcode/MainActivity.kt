@@ -1,6 +1,7 @@
 package com.jepongdevxyz.devxyzcode
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -79,6 +80,25 @@ private fun downscaleImageToBase64(bytes: ByteArray): String? {
     bmp.recycle()
     return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
 }
+
+// v3.8: starter AGENTS.md written by the one-tap "Create AGENTS.md" action.
+// The Agent reads this file at the start of every session (Claude Code /
+// OpenCode / Antigravity parity); the user edits it to teach project rules.
+private val AGENTS_TEMPLATE = """
+# Project rules for DevxyzCode
+
+<!-- Edit this file to teach the Agent your project's conventions.
+     It is read at the start of every Agent session. -->
+
+## Build
+- 
+
+## Style
+- 
+
+## Notes
+- 
+""".trimIndent()
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -187,6 +207,12 @@ fun DevxyzCodeApp(
     }
     var currentSessionId by remember { mutableStateOf(sessionTitles.first().id) }
     fun currentHistory() = histories.getOrPut(currentSessionId) { mutableStateListOf() }
+    // v3.8: per-session Plan-mode plans (persisted in SessionRecord.plan).
+    val sessionPlans = remember {
+        mutableStateMapOf<String, String>().apply {
+            savedSessions.forEach { if (it.plan.isNotBlank()) put(it.id, it.plan) }
+        }
+    }
     fun persistSessions() {
         SettingsStore.saveSessions(
             context,
@@ -194,7 +220,8 @@ fun DevxyzCodeApp(
                 SessionRecord(
                     id = session.id,
                     title = session.title,
-                    messages = histories[session.id]?.toList() ?: emptyList()
+                    messages = histories[session.id]?.toList() ?: emptyList(),
+                    plan = sessionPlans[session.id] ?: ""
                 )
             }
         )
@@ -212,6 +239,94 @@ fun DevxyzCodeApp(
     var editorText by remember { mutableStateOf("") }
     var editorDirty by remember { mutableStateOf(false) }
     var editorStatus by remember { mutableStateOf("") }
+
+    // v3.8: effort selector (Antigravity/Codex reasoning effort, phone-sized).
+    var effort by remember { mutableStateOf(SettingsStore.loadEffort(context)) }
+
+    // v3.8: AGENTS.md / CLAUDE.md rules from the picked project folder.
+    var rulesText by remember { mutableStateOf("") }
+    var rulesFileName by remember { mutableStateOf("") }
+    fun loadRules() {
+        val rulesFile = projectFiles.firstOrNull {
+            it.relativePath == "AGENTS.md" || it.name == "AGENTS.md"
+        } ?: projectFiles.firstOrNull {
+            it.relativePath == "CLAUDE.md" || it.name == "CLAUDE.md"
+        }
+        if (rulesFile != null) {
+            try {
+                rulesText = ProjectStore.readText(context, rulesFile.uriString)
+                rulesFileName = rulesFile.name
+            } catch (e: Exception) {
+                rulesText = ""
+                rulesFileName = ""
+            }
+        } else {
+            rulesText = ""
+            rulesFileName = ""
+        }
+    }
+
+    // v3.8: checkpoints — snapshot before Apply writes anything.
+    val checkpoints = remember {
+        mutableStateListOf<Checkpoint>().apply { addAll(SettingsStore.loadCheckpoints(context)) }
+    }
+    fun takeCheckpoint(paths: List<String>) {
+        val time = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date())
+        val files = mutableMapOf<String, String>()
+        for (path in paths) {
+            val file = projectFiles.firstOrNull {
+                it.relativePath == path || it.relativePath.endsWith("/$path") || it.name == path
+            } ?: continue
+            try {
+                val content = ProjectStore.readText(context, file.uriString)
+                if (content.length <= 100 * 1024) files[file.relativePath] = content
+            } catch (e: Exception) {
+                // Unreadable file: skip it; the Apply still goes ahead.
+            }
+        }
+        if (files.isNotEmpty()) {
+            checkpoints.add(0, Checkpoint(time = time, files = files))
+            while (checkpoints.size > 20) checkpoints.removeAt(checkpoints.size - 1)
+            SettingsStore.saveCheckpoints(context, checkpoints.toList())
+        }
+    }
+    fun restoreCheckpoint(checkpoint: Checkpoint): String {
+        val treeUri = treeUriString.takeIf { it.isNotBlank() }?.let { Uri.parse(it) }
+        if (treeUri == null) return "Pick a project folder in Files first."
+        val restored = mutableListOf<String>()
+        val failed = mutableListOf<String>()
+        for ((path, content) in checkpoint.files) {
+            try {
+                val existing = projectFiles.firstOrNull {
+                    it.relativePath == path || it.relativePath.endsWith("/$path") || it.name == path
+                }
+                if (existing != null) ProjectStore.writeText(context, existing.uriString, content)
+                else ProjectStore.createFile(context, treeUri, path, content)
+                restored.add(path)
+            } catch (e: Exception) {
+                failed.add("$path: ${e.message}")
+            }
+        }
+        try {
+            projectFiles.clear()
+            projectFiles.addAll(ProjectStore.listFiles(context, treeUri))
+        } catch (e: Exception) {
+            // The list refresh is a nicety; the writes above already happened.
+        }
+        loadRules()
+        return buildString {
+            if (restored.isNotEmpty()) append("Restored ${restored.size} file(s): ${restored.joinToString(", ")}.")
+            if (failed.isNotEmpty()) {
+                if (isNotEmpty()) append(" ")
+                append("Failed: ${failed.joinToString("; ")}")
+            }
+            if (restored.isEmpty() && failed.isEmpty()) append("Nothing to restore.")
+        }
+    }
+
+    // v3.8: /review request from the Files editor + jump-to-line target.
+    var reviewRequest by remember { mutableStateOf<ProjectFile?>(null) }
+    var jumpLine by remember { mutableStateOf<Int?>(null) }
 
     // v3.3: vision — one attached image (Base64) for the next Agent send.
     var pendingImageBase64 by remember { mutableStateOf<String?>(null) }
@@ -383,9 +498,42 @@ fun DevxyzCodeApp(
                         if (current != null) {
                             sessionTitles.remove(current)
                             histories.remove(current.id)
+                            sessionPlans.remove(current.id)
                             currentSessionId = sessionTitles.first().id
                             persistSessions()
                         }
+                    }
+                },
+                // v3.8: auto-title from the first message; Rename / Fork.
+                onSessionFirstMessage = { prompt ->
+                    val current = sessionTitles.firstOrNull { it.id == currentSessionId }
+                    if (current != null && current.title.startsWith("Session ")) {
+                        val index = sessionTitles.indexOf(current)
+                        sessionTitles[index] = current.copy(
+                            title = prompt.trim().replace("\n", " ").take(40).ifBlank { current.title }
+                        )
+                        persistSessions()
+                    }
+                },
+                onRenameSession = { title, newTitle ->
+                    val session = sessionTitles.firstOrNull { it.title == title }
+                    if (session != null && newTitle.isNotBlank()) {
+                        val index = sessionTitles.indexOf(session)
+                        sessionTitles[index] = session.copy(title = newTitle.trim().take(60))
+                        persistSessions()
+                    }
+                },
+                onForkSession = { title ->
+                    val session = sessionTitles.firstOrNull { it.title == title }
+                    if (session != null) {
+                        val id = "s${System.currentTimeMillis()}"
+                        sessionTitles.add(SessionRecord(id = id, title = "${session.title} (fork)"))
+                        histories[id] = mutableStateListOf<ChatMessage>().apply {
+                            addAll(histories[session.id] ?: emptyList())
+                        }
+                        sessionPlans[id] = sessionPlans[session.id] ?: ""
+                        currentSessionId = id
+                        persistSessions()
                     }
                 },
                 onHistoryChanged = { persistSessions() },
@@ -413,6 +561,97 @@ fun DevxyzCodeApp(
                 },
                 // v3.7: no-key banner jumps straight to Settings.
                 onOpenSettings = { tab = 7 },
+                // v3.8: effort, rules, checkpoints, plan state, review, @-mention, export, goal.
+                effort = effort,
+                onEffortChange = {
+                    effort = it
+                    SettingsStore.saveEffort(context, it)
+                },
+                effortTemperature = when (effort) { "low" -> 0.2; "high" -> 0.7; else -> 0.2 },
+                effortMaxTokens = when (effort) { "low" -> 1024; "high" -> 8192; else -> null },
+                rulesText = rulesText,
+                rulesFileName = rulesFileName,
+                onCreateAgentsMd = {
+                    val treeUri = treeUriString.takeIf { it.isNotBlank() }?.let { Uri.parse(it) }
+                    if (treeUri == null) {
+                        "Pick a project folder in Files first."
+                    } else {
+                        try {
+                            ProjectStore.createFile(context, treeUri, "AGENTS.md", AGENTS_TEMPLATE)
+                            projectFiles.clear()
+                            projectFiles.addAll(ProjectStore.listFiles(context, treeUri))
+                            loadRules()
+                            "AGENTS.md created — edit it to teach the Agent your project rules."
+                        } catch (e: Exception) {
+                            "Could not create AGENTS.md: ${e.message}"
+                        }
+                    }
+                },
+                checkpoints = checkpoints,
+                onRestoreCheckpoint = { checkpoint -> restoreCheckpoint(checkpoint) },
+                sessionPlan = sessionPlans[currentSessionId] ?: "",
+                onPlanChange = { plan ->
+                    sessionPlans[currentSessionId] = plan
+                    persistSessions()
+                },
+                reviewRequest = reviewRequest,
+                onReviewConsumed = { reviewRequest = null },
+                onReviewFindingTap = { path, line ->
+                    val file = projectFiles.firstOrNull {
+                        it.relativePath == path || it.relativePath.endsWith("/$path") || it.name == path
+                    }
+                    if (file != null) {
+                        openFile = file
+                        editorText = try {
+                            ProjectStore.readText(context, file.uriString)
+                        } catch (e: Exception) {
+                            "Could not open file: ${e.message}"
+                        }
+                        editorDirty = false
+                        editorStatus = ""
+                        jumpLine = line
+                        tab = 1
+                    }
+                },
+                onMentionFile = { file ->
+                    if (attachedFiles.size < 3 && attachedFiles.none { it.uriString == file.uriString }) {
+                        attachedFiles.add(file)
+                        attachedContents[file.relativePath] = try {
+                            ProjectStore.readText(context, file.uriString)
+                        } catch (e: Exception) {
+                            "Could not read ${file.name}: ${e.message}"
+                        }
+                    }
+                },
+                onExportSession = {
+                    val title = sessionTitles.firstOrNull { it.id == currentSessionId }?.title ?: "Session"
+                    val md = buildString {
+                        appendLine("# $title")
+                        appendLine()
+                        for (m in currentHistory()) {
+                            appendLine("## ${m.role}")
+                            appendLine(m.content)
+                            appendLine()
+                        }
+                    }
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_SUBJECT, "$title — DevxyzCode")
+                        putExtra(Intent.EXTRA_TEXT, md)
+                    }
+                    context.startActivity(Intent.createChooser(intent, "Export session"))
+                },
+                onCreateGoal = { text ->
+                    val task = ScheduledTask(
+                        name = text.trim().take(40).ifBlank { "Goal" },
+                        whenText = "Daily",
+                        prompt = text.trim(),
+                        intervalHours = 24
+                    )
+                    scheduledTasks.add(task)
+                    SettingsStore.saveTasks(context, scheduledTasks.toList())
+                    "Goal saved — it runs daily. See it in the Tasks tab."
+                },
                 // v3.3: multi-file plan — review each diff first, then one tap
                 // writes the files. New files are created in the picked folder.
                 projectFiles = projectFiles,
@@ -421,6 +660,8 @@ fun DevxyzCodeApp(
                     if (treeUri == null) {
                         "Pick a project folder in Files first."
                     } else {
+                        // v3.8: snapshot the files about to change first.
+                        takeCheckpoint(blocks.map { it.filename })
                         val applied = mutableListOf<String>()
                         val failed = mutableListOf<String>()
                         for (block in blocks) {
@@ -488,6 +729,7 @@ fun DevxyzCodeApp(
                     ProjectStore.takePermission(context, uri)
                     projectFiles.clear()
                     projectFiles.addAll(ProjectStore.listFiles(context, uri))
+                    loadRules()
                 },
                 openFile = openFile,
                 onOpenFile = { file ->
@@ -511,6 +753,8 @@ fun DevxyzCodeApp(
                     val file = openFile
                     if (file != null) {
                         try {
+                            // v3.8: snapshot the disk copy before overwriting it.
+                            takeCheckpoint(listOf(file.relativePath))
                             ProjectStore.writeText(context, file.uriString, editorText)
                             editorDirty = false
                             editorStatus = "Saved ${file.name}."
@@ -528,6 +772,16 @@ fun DevxyzCodeApp(
                         attachedContents[file.relativePath] = editorText
                         tab = 0
                     } else if (file != null) {
+                        tab = 0
+                    }
+                },
+                // v3.8: jump to a /review finding's line; Review button in the editor.
+                jumpLine = jumpLine,
+                onJumpConsumed = { jumpLine = null },
+                onReviewFile = {
+                    val file = openFile
+                    if (file != null) {
+                        reviewRequest = file
                         tab = 0
                     }
                 }

@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -19,7 +20,7 @@ import java.net.URL
 data class AiMsg(val role: String, val content: String)
 
 @Serializable
-data class AiReq(val model: String, val messages: List<AiMsg>, val temperature: Double = 0.2)
+data class AiReq(val model: String, val messages: List<AiMsg>, val temperature: Double = 0.2, @SerialName("max_tokens") val maxTokens: Int? = null)
 
 @Serializable
 data class AiChoice(val message: AiMsg)
@@ -42,7 +43,9 @@ object AiClient {
         "Muse Spark 1.3"
     )
 
-    private val json = Json { ignoreUnknownKeys = true }
+    // v3.8: explicitNulls = false so an absent max_tokens is omitted from
+    // the request (some providers reject an explicit null).
+    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     suspend fun chat(
         baseUrl: String,
@@ -50,7 +53,10 @@ object AiClient {
         model: String,
         history: List<ChatMessage>,
         systemPrompt: String,
-        imageBase64: String? = null
+        imageBase64: String? = null,
+        // v3.8: effort selector (Low/Medium/High) maps to these.
+        temperature: Double = 0.2,
+        maxTokens: Int? = null
     ): String = withContext(Dispatchers.IO) {
         val cleanBase = baseUrl.trim().trimEnd('/')
         val url = URL("$cleanBase/chat/completions")
@@ -79,7 +85,7 @@ object AiClient {
         // v3.3: vision — when an image is attached, the newest user message
         // carries it as an OpenAI-style image_url part (Gemini models read it).
         val body = if (imageBase64.isNullOrBlank()) {
-            json.encodeToString(AiReq(model = model, messages = msgs))
+            json.encodeToString(AiReq(model = model, messages = msgs, temperature = temperature, maxTokens = maxTokens))
         } else {
             val messagesJson = JSONArray()
             msgs.forEachIndexed { index, msg ->
@@ -105,7 +111,8 @@ object AiClient {
             }
             JSONObject()
                 .put("model", model)
-                .put("temperature", 0.2)
+                .put("temperature", temperature)
+                .apply { if (maxTokens != null) put("max_tokens", maxTokens) }
                 .put("messages", messagesJson)
                 .toString()
         }

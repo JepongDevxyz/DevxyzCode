@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Column
@@ -27,6 +28,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -80,6 +82,26 @@ private val SYSTEM_PROMPT_BASE =
         "Keep answers short first, then the code."
 
 @OptIn(ExperimentalLayoutApi::class)
+// v3.8: one /review finding — P0/P1/P2 with file:line, tappable to jump
+// to that line in the editor (Cursor Bugbot / Codex /review, phone-sized).
+data class ReviewFinding(val severity: String, val file: String, val line: Int, val text: String)
+
+private val REVIEW_LINE = Regex("""(?i)^(P[012])\b.*?([A-Za-z0-9_./-]+):(\d+)\b\s*[-–—:]?\s*(.*)$""")
+
+fun parseReviewFindings(reply: String): List<ReviewFinding> {
+    return reply.lines().mapNotNull { raw ->
+        val line = raw.trim().removePrefix("-").removePrefix("*").trim()
+        val m = REVIEW_LINE.find(line) ?: return@mapNotNull null
+        val lineNo = m.groupValues[3].toIntOrNull() ?: return@mapNotNull null
+        ReviewFinding(
+            severity = m.groupValues[1].uppercase(),
+            file = m.groupValues[2],
+            line = lineNo,
+            text = m.groupValues[4].ifBlank { line }
+        )
+    }.take(30)
+}
+
 @Composable
 fun AgentScreen(
     modifier: Modifier = Modifier,
@@ -126,7 +148,29 @@ fun AgentScreen(
     onOpenInFiles: (String) -> Unit,
     pendingImageBase64: String?,
     onPickImage: () -> Unit,
-    onClearImage: () -> Unit
+    onClearImage: () -> Unit,
+    // v3.8: effort, rules, checkpoints, plan state, review, @-mention,
+    // export, goal, session polish (Claude Code / Cursor / OpenCode parity).
+    effort: String,
+    onEffortChange: (String) -> Unit,
+    effortTemperature: Double,
+    effortMaxTokens: Int?,
+    rulesText: String,
+    rulesFileName: String,
+    onCreateAgentsMd: () -> String,
+    checkpoints: List<Checkpoint>,
+    onRestoreCheckpoint: (Checkpoint) -> String,
+    sessionPlan: String,
+    onPlanChange: (String) -> Unit,
+    reviewRequest: ProjectFile?,
+    onReviewConsumed: () -> Unit,
+    onReviewFindingTap: (String, Int) -> Unit,
+    onMentionFile: (ProjectFile) -> Unit,
+    onExportSession: () -> Unit,
+    onCreateGoal: (String) -> String,
+    onSessionFirstMessage: (String) -> Unit,
+    onRenameSession: (String, String) -> Unit,
+    onForkSession: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -150,6 +194,271 @@ fun AgentScreen(
     // never sent to the AI, and applied only on the user's tap.
     var detectedSetup by remember { mutableStateOf<DetectedSetup?>(null) }
     var setupStatus by remember { mutableStateOf("") }
+    // v3.8: Plan-mode plan card — the model's reply when Plan mode is on,
+    // restored from the session's saved plan when the session reopens.
+    var pendingPlanText by remember(currentSessionTitle) {
+        mutableStateOf(sessionPlan.takeIf { it.isNotBlank() })
+    }
+    // v3.8: context meter breakdown toggle + /compact confirmation.
+    var showContextBreakdown by remember { mutableStateOf(false) }
+    var pendingCompact by remember { mutableStateOf(false) }
+    // v3.8: session search + long-press manage (Rename / Fork).
+    var sessionQuery by remember { mutableStateOf("") }
+    var sessionMenuFor by remember { mutableStateOf<String?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    // v3.8: /review findings parsed from the reply + goal status line.
+    var pendingReview by remember { mutableStateOf(false) }
+    var reviewFindings by remember { mutableStateOf<List<ReviewFinding>>(emptyList()) }
+    var goalStatus by remember { mutableStateOf("") }
+
+    // v3.8: the send flow, extracted from the Send button so Plan
+    // "Approve & Build", /review and /compact can reuse it exactly.
+    fun sendPrompt(prompt: String, extraSystem: String = "") {
+        if (prompt.isBlank() || thinking) return
+        if (apiKey.isBlank()) {
+            error = "Add your API key in Settings first (BYOK — no key is built in)."
+            return
+        }
+        error = ""
+        autoStatus = ""
+        // v3.1: a pasted provider setup never goes to the AI — the
+        // key would be sent to the provider and stored in history.
+        // Show the setup card instead; the raw key is not kept.
+        val setup = ProviderSetup.detect(prompt)
+        if (setup != null) {
+            history.add(ChatMessage("user", "[Provider setup pasted — ${setup.provider}, key hidden]"))
+            detectedSetup = setup
+            setupStatus = ""
+            onHistoryChanged()
+            return
+        }
+        if (history.isEmpty()) onSessionFirstMessage(prompt)
+        attachedFiles.toList().forEach { file ->
+            val content = attachedContents[file.relativePath] ?: ""
+            history.add(
+                ChatMessage(
+                    "user",
+                    "[Attached file: ${file.relativePath}]\n" + content.take(8000)
+                )
+            )
+        }
+        onClearAllAttachments()
+        history.add(ChatMessage("user", prompt))
+        onHistoryChanged()
+        onThinking(true)
+        chatJob = scope.launch {
+            try {
+                val system = buildString {
+                    append(SYSTEM_PROMPT_BASE)
+                    // v3.8: project rules (AGENTS.md / CLAUDE.md) + mode prompts.
+                    if (rulesText.isNotBlank()) {
+                        append("\n\nProject rules (${rulesFileName}):\n")
+                        append(rulesText.take(6000))
+                    }
+                    if (memoryFacts.isNotEmpty()) {
+                        append("\n\nMemory about the user and their projects:\n")
+                        memoryFacts.forEach { append("- ${it.text}\n") }
+                    }
+                    val active = skills.filter { selectedSkills.contains(it.name) }
+                    if (active.isNotEmpty()) {
+                        append("\n\nSkills in use (follow these instructions):\n")
+                        active.forEach { append("- ${it.name}: ${it.instructions}\n") }
+                    }
+                    if (approvalMode == "plan") {
+                        append("\n\nPLAN MODE: Do not write or propose any code edits. Research the attached files and the question, then return a plan only: numbered steps, the files each step touches, and risks. End with 'Ready to build?' — the user approves the plan before anything is written.")
+                    }
+                    if (approvalMode == "ask") {
+                        append("\n\nASK MODE (read-only): Answer and explain only. Never propose code edits or file changes.")
+                    }
+                    if (extraSystem.isNotBlank()) append("\n\n$extraSystem")
+                }
+                val reply = AiClient.chat(
+                    baseUrl = baseUrl,
+                    apiKey = apiKey,
+                    model = model,
+                    history = history.toList(),
+                    systemPrompt = system,
+                    imageBase64 = pendingImageBase64,
+                    temperature = effortTemperature,
+                    maxTokens = effortMaxTokens
+                )
+                history.add(ChatMessage("assistant", reply))
+                // v3.8: Plan mode — the reply IS the plan; keep it for the card.
+                if (approvalMode == "plan") {
+                    pendingPlanText = reply
+                    onPlanChange(reply)
+                }
+                // v3.8: a /review reply is parsed into tappable findings.
+                if (pendingReview) {
+                    reviewFindings = parseReviewFindings(reply)
+                    pendingReview = false
+                }
+                // v3.5 (Codex Auto mode): a single-file code reply goes
+                // straight into the editor — no tab switch, and it is
+                // NOT written to disk until she taps Save in Files.
+                // Multi-file replies stay plan-gated (Apply all tap).
+                if (approvalMode == "auto") {
+                    val named = AiClient.extractNamedCodeBlocks(reply)
+                    if (named.isEmpty()) {
+                        val block = AiClient.extractCodeBlock(reply)
+                        if (block != null && openFile != null) {
+                            onAutoApplyCode(block)
+                            autoStatus = "Auto-applied to the editor — open Files and tap Save to write it."
+                        } else if (block != null) {
+                            autoStatus = "Auto mode needs a file open in Files to apply code."
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                // v3.7: Stop was tapped — record it, then rethrow so
+                // the job really ends; finally clears the busy state.
+                pendingReview = false
+                history.add(ChatMessage("assistant", "Stopped."))
+                throw e
+            } catch (e: Exception) {
+                pendingReview = false
+                history.add(ChatMessage("assistant", "Error: ${e.message}"))
+            } finally {
+                onClearImage()
+                onHistoryChanged()
+                onThinking(false)
+            }
+        }
+    }
+
+    // v3.8: /review — read the file, ask for P0/P1/P2 findings with file:line.
+    fun runReview(file: ProjectFile) {
+        if (apiKey.isBlank()) {
+            error = "Add your API key in Settings first (BYOK — no key is built in)."
+            return
+        }
+        val content = if (file == openFile) editorText else attachedContents[file.relativePath]
+            ?: try {
+                ProjectStore.readText(context, file.uriString)
+            } catch (e: Exception) {
+                ""
+            }
+        if (content.isBlank()) {
+            error = "Nothing to review — the file is empty or unreadable."
+            return
+        }
+        history.add(ChatMessage("user", "[File to review: ${file.relativePath}]\n" + content.take(8000)))
+        onHistoryChanged()
+        onClearAllAttachments()
+        pendingReview = true
+        sendPrompt(
+            "Review the code above and return findings only, one per line, " +
+                "in this exact format: P0/P1/P2, then the file path, a colon, the line number, " +
+                "a dash, then the problem and the fix. Example: P0 - MainActivity.kt:42 - null deref, guard with ?. " +
+                "P0 = crash/security, P1 = bug, P2 = style. No other text."
+        )
+    }
+
+    // v3.8: /compact — summarise the session, then replace history with the
+    // summary (Claude Code / OpenCode /compact, tap-gated by a confirm card).
+    fun runCompact() {
+        if (apiKey.isBlank()) {
+            error = "Add your API key in Settings first (BYOK — no key is built in)."
+            return
+        }
+        if (history.isEmpty()) {
+            error = "Nothing to compact yet."
+            return
+        }
+        pendingCompact = false
+        onThinking(true)
+        chatJob = scope.launch {
+            try {
+                val summary = AiClient.chat(
+                    baseUrl = baseUrl,
+                    apiKey = apiKey,
+                    model = model,
+                    history = history.toList(),
+                    systemPrompt = "Summarise this coding session in under 400 words: what was asked, what was decided, what code was written or changed, and what is still open. Keep file names and decisions. This summary replaces the full history."
+                )
+                history.clear()
+                history.add(ChatMessage("user", "[Earlier session — compacted]"))
+                history.add(ChatMessage("assistant", summary))
+                reviewFindings = emptyList()
+                pendingPlanText = null
+                onPlanChange("")
+                onHistoryChanged()
+            } catch (e: CancellationException) {
+                history.add(ChatMessage("assistant", "Stopped."))
+                throw e
+            } catch (e: Exception) {
+                history.add(ChatMessage("assistant", "Error: ${e.message}"))
+            } finally {
+                onThinking(false)
+            }
+        }
+    }
+
+    // v3.8: slash commands — /review, /compact, /undo, /fork, /export, /goal,
+    // or /<skill-name> to toggle a Skill. Returns true when handled.
+    fun runSlashCommand(raw: String): Boolean {
+        val parts = raw.trim().removePrefix("/").split(" ", limit = 2)
+        val cmd = parts[0].lowercase()
+        val arg = parts.getOrNull(1)?.trim() ?: ""
+        return when (cmd) {
+            "review" -> {
+                val file = openFile ?: attachedFiles.firstOrNull()
+                if (file == null) {
+                    error = "Open or attach a file to review first."
+                } else {
+                    runReview(file)
+                }
+                true
+            }
+            "compact" -> {
+                pendingCompact = true
+                true
+            }
+            "undo" -> {
+                val cp = checkpoints.firstOrNull()
+                if (cp == null) {
+                    error = "No checkpoint yet — checkpoints are saved before Apply writes files."
+                } else {
+                    val result = onRestoreCheckpoint(cp)
+                    history.add(ChatMessage("assistant", result))
+                    onHistoryChanged()
+                }
+                true
+            }
+            "fork" -> {
+                onForkSession(currentSessionTitle)
+                true
+            }
+            "export" -> {
+                onExportSession()
+                true
+            }
+            "goal" -> {
+                if (arg.isBlank()) {
+                    error = "Usage: /goal <what the Agent should do daily>"
+                } else {
+                    goalStatus = onCreateGoal(arg)
+                }
+                true
+            }
+            else -> {
+                val skill = skills.firstOrNull { it.name.equals(cmd, ignoreCase = true) }
+                if (skill != null) {
+                    onToggleSkill(skill.name)
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    // v3.8: Review button in the Files editor → review that file here.
+    LaunchedEffect(reviewRequest) {
+        val file = reviewRequest ?: return@LaunchedEffect
+        onReviewConsumed()
+        runReview(file)
+    }
 
     Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
         Text("DevxyzCode Agent", fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -182,6 +491,8 @@ fun AgentScreen(
         // shows in its UI. Suggest is the default (tap-gate); Auto puts
         // single-file code straight into the editor (disk writes still need
         // your tap — Apply all / Save).
+        // v3.8: Plan mode (Claude Code / Cursor / Codex) and Ask mode
+        // (Cursor Ask / Codex Read Only) join the row.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Mode:", fontSize = 13.sp, fontWeight = FontWeight.Bold)
             OutlinedButton(onClick = { onApprovalModeChange("suggest") }) {
@@ -190,29 +501,135 @@ fun AgentScreen(
             OutlinedButton(onClick = { onApprovalModeChange("auto") }) {
                 Text(if (approvalMode == "auto") "● Auto" else "Auto", fontSize = 12.sp)
             }
+            OutlinedButton(onClick = { onApprovalModeChange("plan") }) {
+                Text(if (approvalMode == "plan") "● Plan" else "Plan", fontSize = 12.sp)
+            }
+            OutlinedButton(onClick = { onApprovalModeChange("ask") }) {
+                Text(if (approvalMode == "ask") "● Ask" else "Ask", fontSize = 12.sp)
+            }
         }
         Text(
-            if (approvalMode == "auto")
-                "Auto: single-file code goes straight to the editor — you still tap Save in Files to write it. Multi-file plans always need your Apply all tap."
-            else
-                "Suggest: code is proposed — you tap Preview diff or Show plan, then Apply.",
+            when (approvalMode) {
+                "auto" -> "Auto: single-file code goes straight to the editor — you still tap Save in Files to write it. Multi-file plans always need your Apply all tap."
+                "plan" -> "Plan: the Agent researches first and returns a plan — no code is written until you tap Approve & Build."
+                "ask" -> "Ask (read-only): the Agent answers and explains — it never proposes edits."
+                else -> "Suggest: code is proposed — you tap Preview diff or Show plan, then Apply."
+            },
             fontSize = 12.sp
         )
         Spacer(Modifier.height(8.dp))
+        // v3.8: project rules — AGENTS.md / CLAUDE.md from the picked folder
+        // (Claude Code / OpenCode / Antigravity). Read at session start and
+        // injected into every prompt; one tap creates a starter file.
+        if (rulesFileName.isNotEmpty()) {
+            Text("Rules loaded: $rulesFileName", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        } else if (projectFiles.isNotEmpty()) {
+            TextButton(onClick = {
+                val result = onCreateAgentsMd()
+                history.add(ChatMessage("assistant", result))
+                onHistoryChanged()
+            }) { Text("Create AGENTS.md — teach the Agent your project rules", fontSize = 12.sp) }
+        }
+        // v3.8: context meter (Cursor ring / OpenCode sidebar, phone-sized) —
+        // estimated tokens from chars/4, % of a ~128k window (estimate).
+        run {
+            val systemChars = SYSTEM_PROMPT_BASE.length + rulesText.length +
+                memoryFacts.sumOf { it.text.length }
+            val historyChars = history.sumOf { it.content.length }
+            val attachedChars = attachedContents.values.sumOf { it.length }
+            val totalChars = systemChars + historyChars + attachedChars
+            val tokens = totalChars / 4
+            val window = 128000
+            val pct = (tokens * 100 / window).coerceIn(0, 100)
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Context: ≈$tokens tokens · $pct% of ~128k window (estimate)", fontSize = 12.sp)
+                    TextButton(onClick = { showContextBreakdown = !showContextBreakdown }) {
+                        Text(if (showContextBreakdown) "Hide" else "Details", fontSize = 12.sp)
+                    }
+                }
+                LinearProgressIndicator(
+                    progress = { (tokens.toFloat() / window).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (showContextBreakdown) {
+                    Text(
+                        "System prompt ≈${systemChars / 4} tokens · Attached files ≈${attachedChars / 4} tokens · Conversation ≈${historyChars / 4} tokens. " +
+                            "Cost is shown only when the provider returns usage in its reply.",
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
         // v3: parallel sessions — each is its own subagent-lite conversation.
         // v3.4: FlowRow — chips wrap to the next line instead of squishing.
+        // v3.8: search + long-press to Rename / Fork (Claude Code / OpenClaw).
+        if (sessionTitles.size > 1) {
+            OutlinedTextField(
+                value = sessionQuery,
+                onValueChange = { sessionQuery = it },
+                label = { Text("Search sessions…") },
+                modifier = Modifier.fillMaxWidth(),
+                maxLines = 1
+            )
+            Spacer(Modifier.height(4.dp))
+        }
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            sessionTitles.forEach { title ->
-                OutlinedButton(onClick = { onSelectSession(title) }) {
+            sessionTitles.filter {
+                sessionQuery.isBlank() || it.contains(sessionQuery, ignoreCase = true)
+            }.forEach { title ->
+                Box(
+                    modifier = Modifier
+                        .combinedClickable(
+                            onClick = { onSelectSession(title) },
+                            onLongClick = { sessionMenuFor = title; renameText = title }
+                        )
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
                     Text(if (title == currentSessionTitle) "● $title" else title, fontSize = 11.sp)
                 }
             }
             TextButton(onClick = onNewSession) { Text("+ New", fontSize = 12.sp) }
             if (sessionTitles.size > 1) {
                 TextButton(onClick = onDeleteSession) { Text("Delete", fontSize = 12.sp) }
+            }
+        }
+        val menuFor = sessionMenuFor
+        if (menuFor != null) {
+            Spacer(Modifier.height(8.dp))
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                    .padding(8.dp)
+            ) {
+                Text("Session: $menuFor", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    label = { Text("New name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 1
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
+                        onRenameSession(menuFor, renameText)
+                        sessionMenuFor = null
+                    }) { Text("Rename") }
+                    OutlinedButton(onClick = {
+                        onForkSession(menuFor)
+                        sessionMenuFor = null
+                    }) { Text("Fork") }
+                    TextButton(onClick = { sessionMenuFor = null }) { Text("Cancel") }
+                }
+                Text("Long-press a session chip to rename or fork it.", fontSize = 12.sp)
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -225,6 +642,19 @@ fun AgentScreen(
             models.forEach { m ->
                 OutlinedButton(onClick = { onModelChange(m) }) {
                     Text(if (m == model) "● $m" else m, fontSize = 11.sp)
+                }
+            }
+        }
+        // v3.8: effort selector (Antigravity picker / Codex reasoning effort,
+        // phone-sized): Low = fast + cheap, Medium = default, High = harder.
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Effort:", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            listOf("low", "medium", "high").forEach { level ->
+                OutlinedButton(onClick = { onEffortChange(level) }) {
+                    Text(
+                        if (effort == level) "● ${level.replaceFirstChar { it.uppercase() }}" else level.replaceFirstChar { it.uppercase() },
+                        fontSize = 12.sp
+                    )
                 }
             }
         }
@@ -419,6 +849,84 @@ fun AgentScreen(
                 }
             }
         }
+        // v3.8: Plan-mode plan card — the reply in Plan mode is the plan;
+        // Approve & Build flips to Suggest and sends "Proceed with this plan".
+        val planText = pendingPlanText
+        if (planText != null) {
+            Spacer(Modifier.height(8.dp))
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Text("Plan — review before building", fontWeight = FontWeight.Bold)
+                    Text("Nothing is written until you tap Approve & Build.", fontSize = 12.sp)
+                    Column(
+                        modifier = Modifier.fillMaxWidth().height(220.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text(planText.take(6000), fontSize = 13.sp)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            val plan = planText
+                            pendingPlanText = null
+                            onPlanChange("")
+                            onApprovalModeChange("suggest")
+                            sendPrompt("Proceed with this plan:\n$plan")
+                        }) { Text("Approve & Build") }
+                        OutlinedButton(onClick = {
+                            pendingPlanText = null
+                            onPlanChange("")
+                        }) { Text("Discard") }
+                    }
+                }
+            }
+        }
+        // v3.8: /review findings — each row jumps to its file:line in Files.
+        if (reviewFindings.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Text("Review findings — ${reviewFindings.size}", fontWeight = FontWeight.Bold)
+                    Text("Tap a finding to jump to its line in the editor.", fontSize = 12.sp)
+                    reviewFindings.forEach { finding ->
+                        TextButton(
+                            onClick = { onReviewFindingTap(finding.file, finding.line) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "[${finding.severity}] ${finding.file}:${finding.line} — ${finding.text}",
+                                fontSize = 13.sp,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                    TextButton(onClick = { reviewFindings = emptyList() }) { Text("Clear findings") }
+                }
+            }
+        }
+        // v3.8: checkpoints — the snapshot saved before the last Apply.
+        val latestCheckpoint = checkpoints.firstOrNull()
+        if (latestCheckpoint != null) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    "Checkpoint saved ${latestCheckpoint.time} (${latestCheckpoint.files.size} file(s))",
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedButton(onClick = {
+                    val result = onRestoreCheckpoint(latestCheckpoint)
+                    history.add(ChatMessage("assistant", result))
+                    onHistoryChanged()
+                }) { Text("Restore", fontSize = 12.sp) }
+            }
+            Text("Tip: type /undo in the chat to restore the last checkpoint.", fontSize = 12.sp)
+        }
+        if (goalStatus.isNotEmpty()) {
+            Text(goalStatus, fontSize = 13.sp)
+        }
         Spacer(Modifier.height(8.dp))
         // v3.4: Cursor / AI Studio style empty state — a hero + suggestion
         // chips instead of a big blank area. Tapping a chip fills the input.
@@ -474,7 +982,10 @@ fun AgentScreen(
                                     val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
                                     onSaveAsSkill("Skill $time", msg.content.take(2000))
                                 }) { Text("Save as Skill") }
-                                if (block != null && openFile != null) {
+                                // v3.8: in Plan/Ask mode there is nothing to
+                                // apply — code actions only exist in Suggest/Auto.
+                                val canApply = approvalMode == "suggest" || approvalMode == "auto"
+                                if (canApply && block != null && openFile != null) {
                                     TextButton(onClick = {
                                         pendingCode = block
                                         pendingDiff = DiffUtil.diff(editorText, block)
@@ -482,7 +993,7 @@ fun AgentScreen(
                                 }
                                 // v3.3: a multi-file reply becomes a plan —
                                 // one card per file, diffs loaded, one-tap Apply all.
-                                if (named.isNotEmpty()) {
+                                if (canApply && named.isNotEmpty()) {
                                     TextButton(onClick = {
                                         pendingPlan = named
                                         planStatus = ""
@@ -515,7 +1026,7 @@ fun AgentScreen(
                                     }
                                 }
                             }
-                            if (block != null && openFile == null) {
+                            if (canApply && block != null && openFile == null) {
                                 Text("Open a file in Files first to preview / apply this code.", fontSize = 12.sp)
                             }
                         }
@@ -556,6 +1067,86 @@ fun AgentScreen(
                 Text("Attach an image for the AI to see (screenshot, design)", fontSize = 12.sp)
             }
         }
+        // v3.8: @-mention popup — type @, pick a project file, its contents
+        // enter the next request (Cursor / OpenCode parity).
+        val mentionQuery: String? = run {
+            val at = input.lastIndexOf('@')
+            if (at < 0) return@run null
+            if (at > 0 && input[at - 1] != ' ' && input[at - 1] != '\n') return@run null
+            val after = input.substring(at + 1)
+            if (after.contains(' ') || after.contains('\n')) return@run null
+            after
+        }
+        if (mentionQuery != null) {
+            val matches = projectFiles.filter {
+                !it.isDir && it.relativePath.contains(mentionQuery, ignoreCase = true)
+            }.take(8)
+            if (matches.isNotEmpty()) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(6.dp)) {
+                        matches.forEach { file ->
+                            TextButton(
+                                onClick = {
+                                    onMentionFile(file)
+                                    val at = input.lastIndexOf('@')
+                                    input = input.substring(0, at) + "@${file.relativePath} "
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    file.relativePath,
+                                    fontSize = 13.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+        }
+        // v3.8: slash menu — / lists Skills + local commands (Claude Code /
+        // Cursor / OpenCode parity). Tap one to run it.
+        if (input.trimStart().startsWith("/") && !input.contains('\n')) {
+            val slashQuery = input.trimStart().removePrefix("/").substringBefore(" ").lowercase()
+            val commandRows: List<Pair<String, String>> = listOf(
+                "/review" to "Review the open / attached file (P0/P1/P2 findings)",
+                "/compact" to "Summarise this session and replace history",
+                "/undo" to "Restore the last checkpoint",
+                "/fork" to "Fork this session",
+                "/export" to "Share this session as Markdown",
+                "/goal" to "Save as a daily scheduled task — /goal <what to do>"
+            ).filter { it.first.contains(slashQuery) } +
+                skills.filter { it.name.contains(slashQuery, ignoreCase = true) }
+                    .map { "/${it.name}" to "Skill: ${it.name}" }
+            if (commandRows.isNotEmpty()) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(6.dp)) {
+                        commandRows.take(8).forEach { (cmd, desc) ->
+                            TextButton(
+                                onClick = {
+                                    if (cmd == "/goal") {
+                                        input = "/goal "
+                                    } else if (runSlashCommand(cmd)) {
+                                        input = ""
+                                    } else {
+                                        error = "Unknown command: $cmd"
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Text(cmd, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                    Text(desc, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+        }
         OutlinedTextField(
             value = input,
             onValueChange = { input = it },
@@ -570,99 +1161,42 @@ fun AgentScreen(
         ) {
             Button(
                 onClick = {
-                val prompt = input.trim()
-                if (prompt.isEmpty() || thinking) return@Button
-                if (apiKey.isBlank()) {
-                    error = "Add your API key in Settings first (BYOK — no key is built in)."
-                    return@Button
-                }
-                error = ""
-                input = ""
-                autoStatus = ""
-                // v3.1: a pasted provider setup never goes to the AI — the
-                // key would be sent to the provider and stored in history.
-                // Show the setup card instead; the raw key is not kept.
-                val setup = ProviderSetup.detect(prompt)
-                if (setup != null) {
-                    history.add(ChatMessage("user", "[Provider setup pasted — ${setup.provider}, key hidden]"))
-                    detectedSetup = setup
-                    setupStatus = ""
-                    onHistoryChanged()
-                    return@Button
-                }
-                attachedFiles.toList().forEach { file ->
-                    val content = attachedContents[file.relativePath] ?: ""
-                    history.add(
-                        ChatMessage(
-                            "user",
-                            "[Attached file: ${file.relativePath}]\n" + content.take(8000)
-                        )
-                    )
-                }
-                onClearAllAttachments()
-                history.add(ChatMessage("user", prompt))
-                onHistoryChanged()
-                onThinking(true)
-                chatJob = scope.launch {
-                    try {
-                        val system = buildString {
-                            append(SYSTEM_PROMPT_BASE)
-                            if (memoryFacts.isNotEmpty()) {
-                                append("\n\nMemory about the user and their projects:\n")
-                                memoryFacts.forEach { append("- ${it.text}\n") }
-                            }
-                            val active = skills.filter { selectedSkills.contains(it.name) }
-                            if (active.isNotEmpty()) {
-                                append("\n\nSkills in use (follow these instructions):\n")
-                                active.forEach { append("- ${it.name}: ${it.instructions}\n") }
-                            }
+                    val prompt = input.trim()
+                    if (prompt.isEmpty() || thinking) return@Button
+                    input = ""
+                    if (prompt.startsWith("/")) {
+                        if (!runSlashCommand(prompt)) {
+                            error = "Unknown command: ${prompt.substringBefore(" ")} — try /review, /compact, /undo, /fork, /export, /goal, or /<skill-name>."
                         }
-                        val reply = AiClient.chat(
-                            baseUrl = baseUrl,
-                            apiKey = apiKey,
-                            model = model,
-                            history = history.toList(),
-                            systemPrompt = system,
-                            imageBase64 = pendingImageBase64
-                        )
-                        history.add(ChatMessage("assistant", reply))
-                        // v3.5 (Codex Auto mode): a single-file code reply goes
-                        // straight into the editor — no tab switch, and it is
-                        // NOT written to disk until she taps Save in Files.
-                        // Multi-file replies stay plan-gated (Apply all tap).
-                        if (approvalMode == "auto") {
-                            val named = AiClient.extractNamedCodeBlocks(reply)
-                            if (named.isEmpty()) {
-                                val block = AiClient.extractCodeBlock(reply)
-                                if (block != null && openFile != null) {
-                                    onAutoApplyCode(block)
-                                    autoStatus = "Auto-applied to the editor — open Files and tap Save to write it."
-                                } else if (block != null) {
-                                    autoStatus = "Auto mode needs a file open in Files to apply code."
-                                }
-                            }
-                        }
-                    } catch (e: CancellationException) {
-                        // v3.7: Stop was tapped — record it, then rethrow so
-                        // the job really ends; finally clears the busy state.
-                        history.add(ChatMessage("assistant", "Stopped."))
-                        throw e
-                    } catch (e: Exception) {
-                        history.add(ChatMessage("assistant", "Error: ${e.message}"))
-                    } finally {
-                        onClearImage()
-                        onHistoryChanged()
-                        onThinking(false)
+                    } else {
+                        sendPrompt(prompt)
                     }
-                }
-            },
-            modifier = Modifier.weight(1f),
-            enabled = !thinking
-        ) { Text(if (thinking) "Thinking…" else "Send") }
+                },
+                modifier = Modifier.weight(1f),
+                enabled = !thinking
+            ) { Text(if (thinking) "Thinking…" else "Send") }
             // v3.7: Stop — cancels the running request (chatJob) so a hung
             // provider can never freeze the Agent.
             if (thinking) {
                 OutlinedButton(onClick = { chatJob?.cancel() }) { Text("Stop") }
+            }
+        }
+        // v3.8: /compact confirmation — summarising replaces the history,
+        // so it needs an explicit tap, never a silent side effect.
+        if (pendingCompact) {
+            Spacer(Modifier.height(8.dp))
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Text("Compact this session?", fontWeight = FontWeight.Bold)
+                    Text(
+                        "The AI summarises the ${history.size} message(s) and the history is replaced by that summary. This cannot be undone.",
+                        fontSize = 13.sp
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { runCompact() }) { Text("Summarise") }
+                        OutlinedButton(onClick = { pendingCompact = false }) { Text("Cancel") }
+                    }
+                }
             }
         }
         Text(
@@ -933,7 +1467,11 @@ fun FilesScreen(
     editorDirty: Boolean,
     editorStatus: String,
     onSave: () -> Unit,
-    onAttachToAgent: () -> Unit
+    onAttachToAgent: () -> Unit,
+    // v3.8: jump to a /review finding's line + Review button (Codex /review).
+    jumpLine: Int? = null,
+    onJumpConsumed: () -> Unit = {},
+    onReviewFile: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -950,6 +1488,21 @@ fun FilesScreen(
     LaunchedEffect(openFile) { editorValue = TextFieldValue(editorText) }
     LaunchedEffect(editorText) {
         if (editorValue.text != editorText) editorValue = TextFieldValue(editorText)
+    }
+    // v3.8: jump to a /review finding's line — move the cursor there.
+    LaunchedEffect(jumpLine) {
+        val line = jumpLine ?: return@LaunchedEffect
+        val text = editorValue.text
+        var offset = 0
+        var current = 1
+        while (current < line && offset < text.length) {
+            val nl = text.indexOf('\n', offset)
+            if (nl < 0) break
+            offset = nl + 1
+            current++
+        }
+        editorValue = TextFieldValue(text, TextRange(offset.coerceIn(0, text.length)))
+        onJumpConsumed()
     }
     val cursor = editorValue.selection.start.coerceIn(0, editorValue.text.length)
     val currentWord = Autocomplete.currentWord(editorValue.text, cursor)
@@ -1039,6 +1592,7 @@ fun FilesScreen(
             ) {
                 Button(onClick = onSave) { Text(if (editorDirty) "Save *" else "Save") }
                 OutlinedButton(onClick = onAttachToAgent) { Text("Attach to Agent") }
+                OutlinedButton(onClick = onReviewFile) { Text("Review") }
                 OutlinedButton(onClick = { showHighlight = !showHighlight }) {
                     Text(if (showHighlight) "Hide highlight" else "Highlight")
                 }
