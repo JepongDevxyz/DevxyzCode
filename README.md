@@ -37,6 +37,7 @@ Cursor / OpenCode / OpenClaw / Hermes / Harness, sa Devxyz branding.
 - Public release (v3.6): first-run onboarding (welcome → provider setup → project folder, lahat puwedeng i-skip), public defaults (walang personal na repo na naka-default), at PRIVACY.md para sa Play Store
 - Status-bar fix (v3.6.1): hindi na lumalampas ang onboarding sa notification status bar (statusBarsPadding + navigationBarsPadding)
 - Usable, like theirs (v3.7.0): hindi na naka-lock ang onboarding (malaking Skip sa bawat step), no-key banner sa Agent na may one-tap papuntang Settings, at Stop button kapag nag-hang ang reply
+- 100% copy ng 9 apps (v3.8.0): Plan mode, @-mention at / commands, AGENTS.md rules, checkpoints bago mag-Apply, Ask mode + /review, context meter, effort selector, at session polish (auto-title, Rename/Fork, search)
 
 **Ano ang HINDI pa rin niya ginagawa — by design:**
 - Hindi siya nagpapatakbo ng shell commands o builds nang mag-isa (Terminal tab lang, ikaw ang magta-tap ng Run), at hindi siya nagsusulat ng files nang hindi mo ina-approve
