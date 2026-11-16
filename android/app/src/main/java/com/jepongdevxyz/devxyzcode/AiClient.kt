@@ -6,6 +6,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -26,6 +28,9 @@ data class AiResp(val choices: List<AiChoice> = emptyList())
 @Serializable
 data class ChatMessage(val role: String, val content: String)
 
+/** v3.3: one file from a multi-file plan — ```` ```lang:relative/path/File.ext ````. */
+data class NamedCodeBlock(val filename: String, val language: String, val code: String)
+
 object AiClient {
     val DEFAULT_BASE_URL = "https://api.apinex.bond/v1"
     val DEFAULT_MODELS = listOf(
@@ -42,7 +47,8 @@ object AiClient {
         apiKey: String,
         model: String,
         history: List<ChatMessage>,
-        systemPrompt: String
+        systemPrompt: String,
+        imageBase64: String? = null
     ): String = withContext(Dispatchers.IO) {
         val cleanBase = baseUrl.trim().trimEnd('/')
         val url = URL("$cleanBase/chat/completions")
@@ -57,7 +63,39 @@ object AiClient {
         }
         val msgs = mutableListOf(AiMsg("system", systemPrompt))
         history.forEach { msgs.add(AiMsg(it.role, it.content)) }
-        val body = json.encodeToString(AiReq(model = model, messages = msgs))
+        // v3.3: vision — when an image is attached, the newest user message
+        // carries it as an OpenAI-style image_url part (Gemini models read it).
+        val body = if (imageBase64.isNullOrBlank()) {
+            json.encodeToString(AiReq(model = model, messages = msgs))
+        } else {
+            val messagesJson = JSONArray()
+            msgs.forEachIndexed { index, msg ->
+                val obj = JSONObject()
+                obj.put("role", msg.role)
+                if (index == msgs.lastIndex && msg.role == "user") {
+                    val parts = JSONArray()
+                    val textPart = JSONObject()
+                    textPart.put("type", "text")
+                    textPart.put("text", msg.content)
+                    parts.put(textPart)
+                    val imagePart = JSONObject()
+                    imagePart.put("type", "image_url")
+                    val imageUrl = JSONObject()
+                    imageUrl.put("url", "data:image/jpeg;base64,$imageBase64")
+                    imagePart.put("image_url", imageUrl)
+                    parts.put(imagePart)
+                    obj.put("content", parts)
+                } else {
+                    obj.put("content", msg.content)
+                }
+                messagesJson.put(obj)
+            }
+            JSONObject()
+                .put("model", model)
+                .put("temperature", 0.2)
+                .put("messages", messagesJson)
+                .toString()
+        }
         conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
         val code = conn.responseCode
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
@@ -95,5 +133,19 @@ object AiClient {
             return reply.substring(afterFirst + 1, end).trim()
         }
         return null
+    }
+
+    /** v3.3: every ```lang:relative/path/File.ext block in a reply — the
+     * multi-file plan format. A block without ":filename" is not a plan
+     * file (the single-block flow still handles it). */
+    fun extractNamedCodeBlocks(reply: String): List<NamedCodeBlock> {
+        val pattern = Regex("""```([A-Za-z0-9_+#.-]*):([^\n`]+)\n([\s\S]*?)```""")
+        return pattern.findAll(reply).mapNotNull { match ->
+            val language = match.groupValues[1].ifBlank { "txt" }
+            val filename = match.groupValues[2].trim()
+            val code = match.groupValues[3].trim('\n')
+            if (filename.isBlank() || code.isBlank()) null
+            else NamedCodeBlock(filename, language, code)
+        }.toList()
     }
 }

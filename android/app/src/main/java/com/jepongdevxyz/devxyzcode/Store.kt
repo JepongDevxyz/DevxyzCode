@@ -138,6 +138,35 @@ object ProjectStore {
             // Permission may already be held; opening still works for the session.
         }
     }
+
+    /** v3.3: create a file (and any missing parent folders) inside the picked
+     * project folder, then write [text] into it. Used by multi-file Apply
+     * for brand-new files from a plan / a scaffold. */
+    fun createFile(context: Context, treeUri: Uri, relativePath: String, text: String): ProjectFile {
+        val root = DocumentFile.fromTreeUri(context, treeUri)
+            ?: throw Exception("No project folder picked.")
+        var dir = root
+        val parts = relativePath.trim('/').split('/').filter { it.isNotEmpty() }
+        if (parts.isEmpty()) throw Exception("Empty file path.")
+        for (part in parts.dropLast(1)) {
+            dir = dir.findFile(part)?.takeIf { it.isDirectory }
+                ?: dir.createDirectory(part)
+                ?: throw Exception("Could not create folder $part.")
+        }
+        val name = parts.last()
+        val existing = dir.findFile(name)
+        val file = if (existing?.isFile == true) existing
+        else dir.createFile("text/plain", name)
+            ?: throw Exception("Could not create file $name.")
+        writeText(context, file.uri.toString(), text)
+        return ProjectFile(
+            name = name,
+            relativePath = relativePath,
+            uriString = file.uri.toString(),
+            isDir = false,
+            size = text.toByteArray(Charsets.UTF_8).size.toLong()
+        )
+    }
 }
 
 /**

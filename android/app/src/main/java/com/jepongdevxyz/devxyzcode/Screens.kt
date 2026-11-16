@@ -19,11 +19,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -55,7 +59,11 @@ import java.util.Locale
 private val SYSTEM_PROMPT_BASE =
     "You are DevxyzCode, a coding assistant inside an Android code editor. " +
         "Answer in the user's language (Tagalog or English, match the user). " +
-        "When you propose code, put the full replacement file content in ONE fenced code block. " +
+        "When you change code, output EACH file as its own fenced block in the form " +
+        "```language:relative/path/File.ext — one block per file, full file content, never a fragment. " +
+        "When the user asks for a new app or project, output EVERY file it needs the same way, with full " +
+        "relative paths, so the whole project can be created in one go. " +
+        "If the user attached an image, look at it first and describe what you see before coding from it. " +
         "You cannot run commands yourself. When you suggest a shell command, put it in a ```sh " +
         "fenced block so the user can tap Run in Terminal (a separate tab, never in this chat). " +
         "Keep answers short first, then the code."
@@ -91,14 +99,27 @@ fun AgentScreen(
     onDeleteSession: () -> Unit,
     onHistoryChanged: () -> Unit,
     onRunInTerminal: (String) -> Unit,
-    onApplyCode: (String) -> Unit
+    onApplyCode: (String) -> Unit,
+    // v3.3: multi-file plan + vision.
+    projectFiles: List<ProjectFile>,
+    onApplyMultiFile: (List<NamedCodeBlock>) -> String,
+    onOpenInFiles: (String) -> Unit,
+    pendingImageBase64: String?,
+    onPickImage: () -> Unit,
+    onClearImage: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var input by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     var pendingCode by remember { mutableStateOf<String?>(null) }
     var pendingDiff by remember { mutableStateOf<List<DiffLine>>(emptyList()) }
+    // v3.3: multi-file plan — the AI's ```lang:path blocks, reviewed per
+    // file, applied with one tap. Nothing is written before that tap.
+    var pendingPlan by remember { mutableStateOf<List<NamedCodeBlock>?>(null) }
+    var pendingPlanDiffs by remember { mutableStateOf<Map<String, List<DiffLine>>>(emptyMap()) }
+    var planStatus by remember { mutableStateOf("") }
     // v3.1: provider self-setup — a pasted setup snippet is detected here,
     // never sent to the AI, and applied only on the user's tap.
     var detectedSetup by remember { mutableStateOf<DetectedSetup?>(null) }
@@ -240,6 +261,79 @@ fun AgentScreen(
                 }
             }
         }
+        // v3.3: multi-file plan — one card per file, diff vs the current
+        // file (or NEW), then one tap writes them all.
+        val plan = pendingPlan
+        if (plan != null) {
+            Spacer(Modifier.height(8.dp))
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Text("Plan — ${plan.size} file(s)", fontWeight = FontWeight.Bold)
+                    Text("Review each diff, then Apply all writes the files. New files are created in the picked project folder.", fontSize = 12.sp)
+                    plan.forEach { block ->
+                        Spacer(Modifier.height(8.dp))
+                        val exists = projectFiles.any {
+                            it.relativePath == block.filename ||
+                                it.relativePath.endsWith("/${block.filename}") ||
+                                it.name == block.filename
+                        }
+                        Text(
+                            "${block.filename} — ${if (exists) "EDIT" else "NEW"}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                        val diffs = pendingPlanDiffs[block.filename] ?: emptyList()
+                        val added = diffs.count { it.kind == DiffKind.ADDED }
+                        val removed = diffs.count { it.kind == DiffKind.REMOVED }
+                        if (diffs.isNotEmpty()) {
+                            Text("+$added lines / -$removed lines", fontSize = 12.sp)
+                            Column(
+                                modifier = Modifier.fillMaxWidth().height(140.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                diffs.take(120).forEach { line ->
+                                    Text(
+                                        text = when (line.kind) {
+                                            DiffKind.ADDED -> "+ ${line.text}"
+                                            DiffKind.REMOVED -> "- ${line.text}"
+                                            DiffKind.UNCHANGED -> "  ${line.text}"
+                                        },
+                                        fontSize = 12.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = when (line.kind) {
+                                            DiffKind.ADDED -> Color(0xFF4ADE80)
+                                            DiffKind.REMOVED -> Color(0xFFF87171)
+                                            DiffKind.UNCHANGED -> Color(0xFF94A3B8)
+                                        }
+                                    )
+                                }
+                            }
+                        } else {
+                            Text("${block.code.lines().size} lines (new content)", fontSize = 12.sp)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            planStatus = onApplyMultiFile(plan)
+                            pendingPlan = null
+                            pendingPlanDiffs = emptyMap()
+                        }) { Text("Apply all (${plan.size})") }
+                        OutlinedButton(onClick = {
+                            pendingPlan = null
+                            pendingPlanDiffs = emptyMap()
+                        }) { Text("Discard") }
+                    }
+                    if (planStatus.isNotEmpty()) {
+                        Text(planStatus, fontSize = 13.sp)
+                        Spacer(Modifier.height(4.dp))
+                        OutlinedButton(onClick = { onOpenInFiles(plan.first().filename) }) {
+                            Text("Open in Files")
+                        }
+                    }
+                }
+            }
+        }
         Spacer(Modifier.height(8.dp))
         LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(history) { msg ->
@@ -254,6 +348,7 @@ fun AgentScreen(
                         if (msg.role == "assistant") {
                             val block = AiClient.extractCodeBlock(msg.content)
                             val shell = AiClient.extractShellBlock(msg.content)
+                            val named = AiClient.extractNamedCodeBlocks(msg.content)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 TextButton(onClick = {
                                     clipboard.setText(AnnotatedString(msg.content))
@@ -267,6 +362,33 @@ fun AgentScreen(
                                         pendingCode = block
                                         pendingDiff = DiffUtil.diff(editorText, block)
                                     }) { Text("Preview diff") }
+                                }
+                                // v3.3: a multi-file reply becomes a plan —
+                                // one card per file, diffs loaded, one-tap Apply all.
+                                if (named.isNotEmpty()) {
+                                    TextButton(onClick = {
+                                        pendingPlan = named
+                                        planStatus = ""
+                                        scope.launch {
+                                            val diffs = withContext(Dispatchers.IO) {
+                                                named.associate { b ->
+                                                    val old = projectFiles.firstOrNull {
+                                                        it.relativePath == b.filename ||
+                                                            it.relativePath.endsWith("/${b.filename}") ||
+                                                            it.name == b.filename
+                                                    }?.let {
+                                                        try {
+                                                            ProjectStore.readText(context, it.uriString)
+                                                        } catch (e: Exception) {
+                                                            ""
+                                                        }
+                                                    } ?: ""
+                                                    b.filename to DiffUtil.diff(old, b.code)
+                                                }
+                                            }
+                                            pendingPlanDiffs = diffs
+                                        }
+                                    }) { Text("Show plan (${named.size} files)") }
                                 }
                                 // v3.1: a ```sh block runs in the Terminal tab,
                                 // never inside this chat, only on her tap.
@@ -290,6 +412,20 @@ fun AgentScreen(
         if (error.isNotEmpty()) {
             Text(error, fontSize = 13.sp)
             Spacer(Modifier.height(4.dp))
+        }
+        // v3.3: vision — attach one image; Gemini models read it with the prompt.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            IconButton(onClick = onPickImage) {
+                Icon(Icons.Filled.Image, contentDescription = "Attach image")
+            }
+            if (pendingImageBase64 != null) {
+                TextButton(onClick = onClearImage) { Text("Image attached ✕") }
+            } else {
+                Text("Attach an image for the AI to see (screenshot, design)", fontSize = 12.sp)
+            }
         }
         OutlinedTextField(
             value = input,
@@ -352,12 +488,14 @@ fun AgentScreen(
                             apiKey = apiKey,
                             model = model,
                             history = history.toList(),
-                            systemPrompt = system
+                            systemPrompt = system,
+                            imageBase64 = pendingImageBase64
                         )
                         history.add(ChatMessage("assistant", reply))
                     } catch (e: Exception) {
                         history.add(ChatMessage("assistant", "Error: ${e.message}"))
                     } finally {
+                        onClearImage()
                         onHistoryChanged()
                         onThinking(false)
                     }
@@ -367,7 +505,9 @@ fun AgentScreen(
             enabled = !thinking
         ) { Text(if (thinking) "Thinking…" else "Send") }
         Text(
-            "v3.1: the AI only chats and proposes code. It never writes files or runs commands by itself. " +
+            "v3.3: the AI only chats and proposes code. It never writes files or runs commands by itself. " +
+                "Multi-file replies become a Plan — review each diff, then Apply all writes the files (new files are created in the picked folder). " +
+                "Attach an image and a vision model reads it with your prompt. " +
                 "Paste a provider setup (e.g. Coarena's 'Copy for your agent') here and the app offers to set itself up — the key never leaves this device.",
             fontSize = 12.sp
         )
@@ -1371,13 +1511,17 @@ fun SettingsScreen(
             Text(saved, fontSize = 13.sp)
         }
         Spacer(Modifier.height(16.dp))
-        Text("DevxyzCode v3.2.0", fontWeight = FontWeight.Bold)
+        Text("DevxyzCode v3.3.0", fontWeight = FontWeight.Bold)
         Text("Package com.jepongdevxyz.devxyzcode · minSdk 26 · targetSdk 35", fontSize = 13.sp)
         Text(
-            "What v3.2 adds: an Announce tab that posts to GitHub — an Issue or a Release, in any " +
-                "repo, with your own Personal Access Token (repo scope, encrypted) and an AI Draft " +
-                "button that writes the announcement from your title. Nothing is posted without your tap. " +
-                "What v3.2 still does NOT do: run gradle / npm / node / python / git on the phone (those " +
+            "What v3.3 adds (AI Studio + Antigravity capabilities, her order): a multi-file Agent plan — " +
+                "the AI answers with one ```lang:path block per file, you review each diff, then one tap " +
+                "on Apply all writes them (new files are created in the picked project folder, so a whole " +
+                "new app can be scaffolded from one prompt); and vision — attach an image and a Gemini " +
+                "model reads it with your prompt. The tap-gate stays: nothing is written or run without " +
+                "your tap, and the sandboxed Terminal still cannot see the SAF project folder, so " +
+                "validation is opening the changed files in Files/editor, not a terminal build. " +
+                "What v3.3 still does NOT do: run gradle / npm / node / python / git on the phone (those " +
                 "binaries do not exist on a phone), full LSP servers, or WhatsApp control. Every change " +
                 "still needs your tap, except scheduled tasks you created yourself.",
             fontSize = 13.sp

@@ -2,8 +2,12 @@ package com.jepongdevxyz.devxyzcode
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -37,9 +41,28 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+/** v3.3: downscale an attached image (max 1024px side, JPEG 85) and return
+ * it as Base64 for the vision request. Null when the bytes are not an image. */
+private fun downscaleImageToBase64(bytes: ByteArray): String? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    val w = bounds.outWidth
+    val h = bounds.outHeight
+    if (w <= 0 || h <= 0) return null
+    var sample = 1
+    while (maxOf(w, h) / sample > 1024) sample *= 2
+    val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
+    val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts) ?: return null
+    val out = ByteArrayOutputStream()
+    bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+    bmp.recycle()
+    return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -121,6 +144,21 @@ fun DevxyzCodeApp() {
     var editorText by remember { mutableStateOf("") }
     var editorDirty by remember { mutableStateOf(false) }
     var editorStatus by remember { mutableStateOf("") }
+
+    // v3.3: vision — one attached image (Base64) for the next Agent send.
+    var pendingImageBase64 by remember { mutableStateOf<String?>(null) }
+    val pickImageLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                if (bytes != null) pendingImageBase64 = downscaleImageToBase64(bytes)
+            } catch (e: Exception) {
+                // Unreadable image: nothing is attached; the Agent says so on send.
+            }
+        }
+    }
 
     val runs = remember { mutableStateListOf<RunRecord>().apply { addAll(SettingsStore.loadRuns(context)) } }
 
@@ -274,7 +312,70 @@ fun DevxyzCodeApp() {
                     editorDirty = true
                     editorStatus = "Code applied to editor — tap Save in Files to write it."
                     tab = 1
-                }
+                },
+                // v3.3: multi-file plan — review each diff first, then one tap
+                // writes the files. New files are created in the picked folder.
+                projectFiles = projectFiles,
+                onApplyMultiFile = { blocks ->
+                    val treeUri = treeUriString.takeIf { it.isNotBlank() }?.let { Uri.parse(it) }
+                    if (treeUri == null) {
+                        "Pick a project folder in Files first."
+                    } else {
+                        val applied = mutableListOf<String>()
+                        val failed = mutableListOf<String>()
+                        for (block in blocks) {
+                            try {
+                                val existing = projectFiles.firstOrNull {
+                                    it.relativePath == block.filename ||
+                                        it.relativePath.endsWith("/${block.filename}") ||
+                                        it.name == block.filename
+                                }
+                                if (existing != null) {
+                                    ProjectStore.writeText(context, existing.uriString, block.code)
+                                    applied.add("${block.filename} (updated)")
+                                } else {
+                                    ProjectStore.createFile(context, treeUri, block.filename, block.code)
+                                    applied.add("${block.filename} (new)")
+                                }
+                            } catch (e: Exception) {
+                                failed.add("${block.filename}: ${e.message}")
+                            }
+                        }
+                        try {
+                            projectFiles.clear()
+                            projectFiles.addAll(ProjectStore.listFiles(context, treeUri))
+                        } catch (e: Exception) {
+                            // The list refresh is a nicety; the writes above already happened.
+                        }
+                        buildString {
+                            if (applied.isNotEmpty()) append("Applied ${applied.size} file(s): ${applied.joinToString(", ")}.")
+                            if (failed.isNotEmpty()) {
+                                if (isNotEmpty()) append(" ")
+                                append("Failed: ${failed.joinToString("; ")}")
+                            }
+                            if (applied.isEmpty() && failed.isEmpty()) append("Nothing was applied.")
+                        }
+                    }
+                },
+                onOpenInFiles = { path ->
+                    val file = projectFiles.firstOrNull {
+                        it.relativePath == path || it.relativePath.endsWith("/$path") || it.name == path
+                    }
+                    if (file != null) {
+                        openFile = file
+                        editorText = try {
+                            ProjectStore.readText(context, file.uriString)
+                        } catch (e: Exception) {
+                            "Could not open file: ${e.message}"
+                        }
+                        editorDirty = false
+                        editorStatus = ""
+                    }
+                    tab = 1
+                },
+                pendingImageBase64 = pendingImageBase64,
+                onPickImage = { pickImageLauncher.launch("image/*") },
+                onClearImage = { pendingImageBase64 = null }
             )
             1 -> FilesScreen(
                 modifier = Modifier.padding(innerPadding),
