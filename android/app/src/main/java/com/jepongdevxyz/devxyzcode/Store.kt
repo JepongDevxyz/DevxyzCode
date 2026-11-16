@@ -38,12 +38,41 @@ data class SkillRecord(
 @Serializable
 data class MemoryFact(val text: String, val time: String)
 
-/** OpenClaw Automations / Hermes scheduled job (stored; shown as due in Runs). */
+/** OpenClaw Automations / Hermes scheduled job. v3: runs in the background
+ * via WorkManager every [intervalHours]; [lastRunAtMillis] is epoch ms of the
+ * last run (0 = never run — the next worker cycle runs it once). */
 @Serializable
 data class ScheduledTask(
     val name: String,
     val whenText: String,
-    val prompt: String
+    val prompt: String,
+    val intervalHours: Int = 24,
+    val lastRunAtMillis: Long = 0L
+)
+
+/** v3: one Agent session (parallel subagent-lite — each has its own history). */
+@Serializable
+data class SessionRecord(
+    val id: String,
+    val title: String,
+    val messages: List<ChatMessage> = emptyList()
+)
+
+/** v3: a Telegram message received through the user's own bot. */
+@Serializable
+data class TelegramMessage(
+    val chatId: Long,
+    val from: String,
+    val text: String,
+    val time: String
+)
+
+/** v3: the saved result of a scheduled task run (foreground or background). */
+@Serializable
+data class TaskResult(
+    val taskName: String,
+    val result: String,
+    val time: String
 )
 
 object ProjectStore {
@@ -119,6 +148,7 @@ object ProjectStore {
 object SecureKeyStore {
     private const val SECURE_PREFS = "devxyzcode_secure"
     private const val KEY_API = "api_key"
+    private const val KEY_BOT = "telegram_bot_token"
 
     private fun securePrefs(context: Context) =
         androidx.security.crypto.EncryptedSharedPreferences.create(
@@ -145,6 +175,25 @@ object SecureKeyStore {
         } catch (e: Exception) {
             // Fallback is handled by SettingsStore (plain private prefs).
             throw e
+        }
+    }
+
+    /** v3: Telegram bot token, encrypted like the API key. */
+    fun loadBotToken(context: Context): String {
+        return try {
+            securePrefs(context).getString(KEY_BOT, "") ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    fun saveBotToken(context: Context, token: String) {
+        try {
+            securePrefs(context).edit().putString(KEY_BOT, token.trim()).apply()
+        } catch (e: Exception) {
+            context.getSharedPreferences("devxyzcode_settings", Context.MODE_PRIVATE).edit()
+                .putString("telegram_bot_token_plain", token.trim())
+                .apply()
         }
     }
 }
@@ -238,4 +287,50 @@ object SettingsStore {
     fun saveMemory(context: Context, items: List<MemoryFact>) = saveList(context, KEY_MEMORY, items)
     fun loadTasks(context: Context): List<ScheduledTask> = loadList(context, KEY_TASKS)
     fun saveTasks(context: Context, items: List<ScheduledTask>) = saveList(context, KEY_TASKS, items)
+
+    // v3: Agent sessions, Telegram messages, task results, bot token, auto-Skill.
+    private const val KEY_SESSIONS = "agent_sessions"
+    private const val KEY_TELEGRAM = "telegram_messages"
+    private const val KEY_TASK_RESULTS = "task_results"
+    private const val KEY_TELEGRAM_OFFSET = "telegram_offset"
+    private const val KEY_AUTO_SKILL = "auto_save_skills"
+
+    fun loadSessions(context: Context): List<SessionRecord> = loadList(context, KEY_SESSIONS)
+    fun saveSessions(context: Context, items: List<SessionRecord>) = saveList(context, KEY_SESSIONS, items)
+    fun loadTelegramMessages(context: Context): List<TelegramMessage> = loadList(context, KEY_TELEGRAM)
+    fun saveTelegramMessages(context: Context, items: List<TelegramMessage>) = saveList(context, KEY_TELEGRAM, items)
+    fun loadTaskResults(context: Context): List<TaskResult> = loadList(context, KEY_TASK_RESULTS)
+    fun saveTaskResults(context: Context, items: List<TaskResult>) = saveList(context, KEY_TASK_RESULTS, items)
+
+    fun loadTelegramOffset(context: Context): Long =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getLong(KEY_TELEGRAM_OFFSET, 0L)
+
+    fun saveTelegramOffset(context: Context, offset: Long) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putLong(KEY_TELEGRAM_OFFSET, offset)
+            .apply()
+    }
+
+    fun loadBotToken(context: Context): String {
+        val secure = SecureKeyStore.loadBotToken(context)
+        if (secure.isNotBlank()) return secure
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString("telegram_bot_token_plain", "") ?: ""
+    }
+
+    fun saveBotToken(context: Context, token: String) {
+        SecureKeyStore.saveBotToken(context, token)
+    }
+
+    /** Hermes self-improvement lite. Default OFF (her rule: toggles off first run). */
+    fun loadAutoSaveSkills(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_AUTO_SKILL, false)
+
+    fun saveAutoSaveSkills(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_AUTO_SKILL, enabled)
+            .apply()
+    }
 }
