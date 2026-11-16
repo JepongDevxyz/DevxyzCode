@@ -1,4 +1,4 @@
-# DevxyzCode — SPEC v2.0.0 (the 100% release)
+# DevxyzCode — SPEC v2.1.0
 
 Sariling branding ni Jepong: AI coding assistant for Android, inspired by
 Claude Code, Cursor, OpenCode, OpenClaw, Hermes Agent, at Harness.
@@ -6,7 +6,7 @@ Hindi fork ng kahit alin sa kanila — sariling app, sariling pangalan,
 sariling package.
 
 - Package: `com.jepongdevxyz.devxyzcode`
-- App: DevxyzCode 2.0.0 (versionCode 2)
+- App: DevxyzCode 2.1.0 (versionCode 3)
 - minSdk 26, targetSdk 35, compileSdk 35
 - Stack: Kotlin + Jetpack Compose (Material3), AGP 8.5.2, Kotlin 2.0.20, Gradle 8.9
   — same proven template as DevxyzLogin, na nag-build sa CI.
@@ -47,6 +47,16 @@ DevxyzCode does every step with her tap. Everything else is in.
 | LSP / go-to-definition / diagnostics | — | yes | yes | — | — | — | **NO in v2** |
 | Messaging-gateway control (WhatsApp/Telegram) | — | — | — | yes | yes | — | **NO in v2** |
 
+## v2.1 scope (added on top of v2)
+
+- **Branded app icon** — adaptive icon, cyan `</>` mark on dark navy
+  (`#0B1220` bg, `#22D3EE` accent), round + square. (The `</>` foreground
+  was already in the project since v1; v2.1 confirms it is the shipped icon.)
+- **Branded splash screen** — Android 12+ SplashScreen API
+  (`androidx.core:core-splashscreen`), dark navy background, same `</>`
+  mark as the animated icon, no white flash on launch
+  (`Theme.DevxyzCode.Starting` + `installSplashScreen()` in MainActivity).
+
 ## v2 scope (what is built now)
 
 1. **Agent tab** — BYOK chat; up to 3 attached files; Skills in use + Memory
@@ -67,6 +77,8 @@ DevxyzCode does every step with her tap. Everything else is in.
   every change needs her tap.
 - No autocomplete, no LSP, no messaging gateway, no background agent
   (Android does not run the agent while the app is closed in v2).
+- Scheduled tasks are stored reminders, not auto-run jobs; Skills are
+  manual (Save-as-Skill), not a self-improving loop; no parallel subagents.
 - One project folder at a time; file list caps at 500 files; highlight
   preview caps at 200 lines; diff caps at 400,000 line-pairs.
 - AI replies depend on the key she enters.
