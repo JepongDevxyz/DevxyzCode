@@ -13,8 +13,8 @@ android {
         applicationId = "com.jepongdevxyz.devxyzcode"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "3.1.0"
+        versionCode = 6
+        versionName = "3.1.1"
     }
 
     buildTypes {
@@ -26,38 +26,42 @@ android {
             )
         }
     }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
     kotlinOptions {
         jvmTarget = "17"
     }
-
     buildFeatures {
         compose = true
-    }
-
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.15"
     }
 }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.activity:activity-compose:1.9.2")
-    implementation(platform("androidx.compose:compose-bom:2024.09.00"))
+    implementation("androidx.activity:activity-compose:1.9.3")
+    implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
+    implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.5")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
-    implementation("androidx.documentfile:documentfile:1.0.1")
+
+    // v2: API key lives in EncryptedSharedPreferences, not plain prefs.
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
+    // v2.1: branded splash screen (Android 12+ SplashScreen API, backported).
+    implementation("androidx.core:core-splashscreen:1.0.1")
+
+    // v3: background scheduled tasks + Telegram polling (WorkManager).
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
