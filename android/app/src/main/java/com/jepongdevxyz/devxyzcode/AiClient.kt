@@ -1,6 +1,8 @@
 package com.jepongdevxyz.devxyzcode
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -61,6 +63,17 @@ object AiClient {
             setRequestProperty("Authorization", "Bearer $apiKey")
             setRequestProperty("Accept", "application/json")
         }
+        // v3.7: make Stop real — a blocked read() on Dispatchers.IO does NOT
+        // notice coroutine cancellation, so disconnect the socket when the
+        // job is cancelled; the read then throws and is rethrown below as a
+        // CancellationException, so the Agent shows "Stopped." at once
+        // instead of waiting out the 120s read timeout.
+        coroutineContext[Job]?.invokeOnCompletion {
+            if (coroutineContext[Job]?.isCancelled == true) {
+                try { conn.disconnect() } catch (_: Exception) { }
+            }
+        }
+        try {
         val msgs = mutableListOf(AiMsg("system", systemPrompt))
         history.forEach { msgs.add(AiMsg(it.role, it.content)) }
         // v3.3: vision — when an image is attached, the newest user message
@@ -100,13 +113,18 @@ object AiClient {
         val code = conn.responseCode
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
         val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
-        conn.disconnect()
         if (code !in 200..299) {
             throw Exception("API error $code: ${text.take(300)}")
         }
         val resp = json.decodeFromString<AiResp>(text)
         resp.choices.firstOrNull()?.message?.content
             ?: throw Exception("Empty reply from model.")
+        } catch (e: Exception) {
+            if (coroutineContext[Job]?.isCancelled == true) throw CancellationException("Stopped.")
+            throw e
+        } finally {
+            try { conn.disconnect() } catch (_: Exception) { }
+        }
     }
 
     /** First fenced code block in a reply, without the fences. Null when none. */

@@ -411,6 +411,8 @@ fun DevxyzCodeApp(
                     editorDirty = true
                     editorStatus = "Auto-applied to editor — tap Save in Files to write it."
                 },
+                // v3.7: no-key banner jumps straight to Settings.
+                onOpenSettings = { tab = 7 },
                 // v3.3: multi-file plan — review each diff first, then one tap
                 // writes the files. New files are created in the picked folder.
                 projectFiles = projectFiles,

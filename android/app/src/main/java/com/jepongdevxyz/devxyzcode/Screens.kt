@@ -3,7 +3,9 @@ package com.jepongdevxyz.devxyzcode
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -25,6 +27,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -55,7 +58,9 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -111,6 +116,10 @@ fun AgentScreen(
     approvalMode: String,
     onApprovalModeChange: (String) -> Unit,
     onAutoApplyCode: (String) -> Unit,
+    // v3.7: jump to Settings when there is no API key yet (the no-key
+    // banner). Like Cursor/Codex: the workspace opens first, the missing
+    // key is a banner, never a wall.
+    onOpenSettings: () -> Unit,
     // v3.3: multi-file plan + vision.
     projectFiles: List<ProjectFile>,
     onApplyMultiFile: (List<NamedCodeBlock>) -> String,
@@ -133,6 +142,10 @@ fun AgentScreen(
     var planStatus by remember { mutableStateOf("") }
     // v3.5 (Codex): Auto-mode notice — what the agent just applied, if anything.
     var autoStatus by remember { mutableStateOf("") }
+    // v3.7: the running chat request, so a stuck reply can be stopped
+    // (Claude Code / Cursor / Codex all have Esc/Stop; the app had none —
+    // a hung provider left the Agent frozen on "Thinking…").
+    var chatJob by remember { mutableStateOf<Job?>(null) }
     // v3.1: provider self-setup — a pasted setup snippet is detected here,
     // never sent to the AI, and applied only on the user's tap.
     var detectedSetup by remember { mutableStateOf<DetectedSetup?>(null) }
@@ -145,6 +158,26 @@ fun AgentScreen(
             fontSize = 13.sp
         )
         Spacer(Modifier.height(8.dp))
+        // v3.7: no-key banner — the app is usable with no key (the workspace
+        // opens first), and this banner is the one-tap path to add it.
+        // Her order: "Ayusin mo di usable ang app" — the old flow gated the
+        // whole app behind onboarding + a key; now nothing gates it.
+        if (apiKey.isBlank()) {
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                    .padding(12.dp)
+            ) {
+                Text(
+                    "No API key yet — the Agent can't chat until you add one. " +
+                        "Bring your own key (BYOK); it stays encrypted on this device.",
+                    fontSize = 13.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = onOpenSettings) { Text("Add API key") }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
         // v3.5 (Codex): approval mode indicator — the same mode switch Codex
         // shows in its UI. Suggest is the default (tap-gate); Auto puts
         // single-file code straight into the editor (disk writes still need
@@ -531,8 +564,12 @@ fun AgentScreen(
             maxLines = 4
         )
         Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = {
                 val prompt = input.trim()
                 if (prompt.isEmpty() || thinking) return@Button
                 if (apiKey.isBlank()) {
@@ -566,7 +603,7 @@ fun AgentScreen(
                 history.add(ChatMessage("user", prompt))
                 onHistoryChanged()
                 onThinking(true)
-                scope.launch {
+                chatJob = scope.launch {
                     try {
                         val system = buildString {
                             append(SYSTEM_PROMPT_BASE)
@@ -605,6 +642,11 @@ fun AgentScreen(
                                 }
                             }
                         }
+                    } catch (e: CancellationException) {
+                        // v3.7: Stop was tapped — record it, then rethrow so
+                        // the job really ends; finally clears the busy state.
+                        history.add(ChatMessage("assistant", "Stopped."))
+                        throw e
                     } catch (e: Exception) {
                         history.add(ChatMessage("assistant", "Error: ${e.message}"))
                     } finally {
@@ -614,9 +656,15 @@ fun AgentScreen(
                     }
                 }
             },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.weight(1f),
             enabled = !thinking
         ) { Text(if (thinking) "Thinking…" else "Send") }
+            // v3.7: Stop — cancels the running request (chatJob) so a hung
+            // provider can never freeze the Agent.
+            if (thinking) {
+                OutlinedButton(onClick = { chatJob?.cancel() }) { Text("Stop") }
+            }
+        }
         Text(
             "v3.3: the AI only chats and proposes code. It never writes files or runs commands by itself. " +
                 "Multi-file replies become a Plan — review each diff, then Apply all writes the files (new files are created in the picked folder). " +
@@ -1561,6 +1609,13 @@ fun OnboardingScreen(
                 Button(onClick = { step = 1 }, modifier = Modifier.fillMaxWidth()) {
                     Text("Get started")
                 }
+                Spacer(Modifier.height(8.dp))
+                // v3.7: the way out must be big and unmissable on EVERY step —
+                // the old flow's only escape was a small link, which is why
+                // the app felt locked ("di usable").
+                OutlinedButton(onClick = onFinish, modifier = Modifier.fillMaxWidth()) {
+                    Text("Skip setup — open the app →")
+                }
             }
             1 -> {
                 Text("Step 1 of 2 — Your AI provider", fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -1614,7 +1669,7 @@ fun OnboardingScreen(
                 Button(
                     onClick = {
                         if (apiKey.isBlank()) {
-                            error = "Paste your API key first — or tap Skip for now and add it later in Settings."
+                            error = "Paste your API key first — or tap Skip below and add it later in Settings."
                         } else {
                             error = ""
                             step = 2
@@ -1623,7 +1678,9 @@ fun OnboardingScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Save & continue") }
                 Spacer(Modifier.height(8.dp))
-                TextButton(onClick = { step = 2 }) { Text("Skip for now") }
+                OutlinedButton(onClick = { step = 2 }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Skip — I'll add a key later")
+                }
             }
             else -> {
                 Text("Step 2 of 2 — Project folder (optional)", fontSize = 20.sp, fontWeight = FontWeight.Bold)
