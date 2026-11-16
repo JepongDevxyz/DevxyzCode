@@ -105,6 +105,10 @@ fun AgentScreen(
     onHistoryChanged: () -> Unit,
     onRunInTerminal: (String) -> Unit,
     onApplyCode: (String) -> Unit,
+    // v3.5 (Codex): approval mode — Suggest (default) or Auto.
+    approvalMode: String,
+    onApprovalModeChange: (String) -> Unit,
+    onAutoApplyCode: (String) -> Unit,
     // v3.3: multi-file plan + vision.
     projectFiles: List<ProjectFile>,
     onApplyMultiFile: (List<NamedCodeBlock>) -> String,
@@ -125,6 +129,8 @@ fun AgentScreen(
     var pendingPlan by remember { mutableStateOf<List<NamedCodeBlock>?>(null) }
     var pendingPlanDiffs by remember { mutableStateOf<Map<String, List<DiffLine>>>(emptyMap()) }
     var planStatus by remember { mutableStateOf("") }
+    // v3.5 (Codex): Auto-mode notice — what the agent just applied, if anything.
+    var autoStatus by remember { mutableStateOf("") }
     // v3.1: provider self-setup — a pasted setup snippet is detected here,
     // never sent to the AI, and applied only on the user's tap.
     var detectedSetup by remember { mutableStateOf<DetectedSetup?>(null) }
@@ -135,6 +141,27 @@ fun AgentScreen(
         Text(
             "Chat + propose code. Nothing is written or run until you approve it.",
             fontSize = 13.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        // v3.5 (Codex): approval mode indicator — the same mode switch Codex
+        // shows in its UI. Suggest is the default (tap-gate); Auto puts
+        // single-file code straight into the editor (disk writes still need
+        // your tap — Apply all / Save).
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Mode:", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            OutlinedButton(onClick = { onApprovalModeChange("suggest") }) {
+                Text(if (approvalMode == "suggest") "● Suggest" else "Suggest", fontSize = 12.sp)
+            }
+            OutlinedButton(onClick = { onApprovalModeChange("auto") }) {
+                Text(if (approvalMode == "auto") "● Auto" else "Auto", fontSize = 12.sp)
+            }
+        }
+        Text(
+            if (approvalMode == "auto")
+                "Auto: single-file code goes straight to the editor — you still tap Save in Files to write it. Multi-file plans always need your Apply all tap."
+            else
+                "Suggest: code is proposed — you tap Preview diff or Show plan, then Apply.",
+            fontSize = 12.sp
         )
         Spacer(Modifier.height(8.dp))
         // v3: parallel sessions — each is its own subagent-lite conversation.
@@ -302,7 +329,8 @@ fun AgentScreen(
                         Text(
                             "${block.filename} — ${if (exists) "EDIT" else "NEW"}",
                             fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace
                         )
                         val diffs = pendingPlanDiffs[block.filename] ?: emptyList()
                         val added = diffs.count { it.kind == DiffKind.ADDED }
@@ -460,12 +488,23 @@ fun AgentScreen(
                 }
             }
             if (thinking) {
-                item { CircularProgressIndicator() }
+                // v3.5 (Codex): working status names the model, like Codex's
+                // "Working" line — no fake step list, the reply is one shot.
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                        Text("Working with $model…", fontSize = 13.sp)
+                    }
+                }
             }
         }
         }
         if (error.isNotEmpty()) {
             Text(error, fontSize = 13.sp)
+            Spacer(Modifier.height(4.dp))
+        }
+        if (autoStatus.isNotEmpty()) {
+            Text(autoStatus, fontSize = 13.sp)
             Spacer(Modifier.height(4.dp))
         }
         // v3.3: vision — attach one image; Gemini models read it with the prompt.
@@ -500,6 +539,7 @@ fun AgentScreen(
                 }
                 error = ""
                 input = ""
+                autoStatus = ""
                 // v3.1: a pasted provider setup never goes to the AI — the
                 // key would be sent to the provider and stored in history.
                 // Show the setup card instead; the raw key is not kept.
@@ -547,6 +587,22 @@ fun AgentScreen(
                             imageBase64 = pendingImageBase64
                         )
                         history.add(ChatMessage("assistant", reply))
+                        // v3.5 (Codex Auto mode): a single-file code reply goes
+                        // straight into the editor — no tab switch, and it is
+                        // NOT written to disk until she taps Save in Files.
+                        // Multi-file replies stay plan-gated (Apply all tap).
+                        if (approvalMode == "auto") {
+                            val named = AiClient.extractNamedCodeBlocks(reply)
+                            if (named.isEmpty()) {
+                                val block = AiClient.extractCodeBlock(reply)
+                                if (block != null && openFile != null) {
+                                    onAutoApplyCode(block)
+                                    autoStatus = "Auto-applied to the editor — open Files and tap Save to write it."
+                                } else if (block != null) {
+                                    autoStatus = "Auto mode needs a file open in Files to apply code."
+                                }
+                            }
+                        }
                     } catch (e: Exception) {
                         history.add(ChatMessage("assistant", "Error: ${e.message}"))
                     } finally {
@@ -1470,6 +1526,9 @@ fun SettingsScreen(
     onAnnounceRepoChange: (String) -> Unit,
     autoSaveSkills: Boolean,
     onAutoSaveSkillsChange: (Boolean) -> Unit,
+    // v3.5 (Codex): approval mode.
+    approvalMode: String,
+    onApprovalModeChange: (String) -> Unit,
     onSave: () -> Unit
 ) {
     var saved by remember { mutableStateOf("") }
@@ -1576,6 +1635,27 @@ fun SettingsScreen(
         Spacer(Modifier.height(12.dp))
         Text("Agent", fontSize = 15.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
+        // v3.5 (Codex): approval mode — Suggest is the default tap-gate.
+        Text("Approval mode", fontWeight = FontWeight.Bold)
+        Text(
+            "Suggest: code is proposed — you tap Preview diff or Show plan, then Apply. " +
+                "Auto: single-file code goes straight to the editor — you still tap Save in Files to write it. " +
+                "Multi-file plans and disk writes always need your tap, in both modes.",
+            fontSize = 13.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(onClick = { onApprovalModeChange("suggest") }) {
+                Text(if (approvalMode == "suggest") "● Suggest" else "Suggest", fontSize = 12.sp)
+            }
+            OutlinedButton(onClick = { onApprovalModeChange("auto") }) {
+                Text(if (approvalMode == "auto") "● Auto" else "Auto", fontSize = 12.sp)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -1602,21 +1682,22 @@ fun SettingsScreen(
             Text(saved, fontSize = 13.sp)
         }
         Spacer(Modifier.height(16.dp))
-        Text("DevxyzCode v3.4.0", fontWeight = FontWeight.Bold)
+        Text("DevxyzCode v3.5.0", fontWeight = FontWeight.Bold)
         Text("Package com.jepongdevxyz.devxyzcode · minSdk 26 · targetSdk 35", fontSize = 13.sp)
         Text(
-            "What v3.4 adds (professional UI, her order — a blend of Claude Code / Cursor / " +
-                "OpenCode / OpenClaw / Harness / Hermes / Antigravity / AI Studio): every chip row " +
-                "that squished or overlapped now wraps (FlowRow) — model chips, session chips, " +
-                "message actions, editor toolbar, autocomplete suggestions, provider presets — so " +
-                "nothing renders one letter per line; the bottom tab bar is now a scrollable pill " +
-                "bar with single-line labels that never wrap; the Agent has a Cursor / AI Studio " +
-                "style empty state with suggestion chips; and Settings is organized into sections " +
-                "(Appearance with a System / Dark / Light theme picker, Provider & Model, GitHub, " +
-                "Telegram, Agent, About). The tap-gate stays: nothing is written or run without " +
-                "your tap. What v3.4 still does NOT do: run gradle / npm / node / python / git on " +
-                "the phone (those binaries do not exist on a phone), full LSP servers, or WhatsApp " +
-                "control. Every change still needs your tap, except scheduled tasks you created yourself.",
+            "What v3.5 adds (Codex UI + capabilities, her order): Codex-style approval modes — " +
+                "Suggest (default, the tap-gate: Preview diff / Show plan, then Apply) and Auto " +
+                "(single-file code goes straight to the editor, no tab switch — you still tap Save " +
+                "in Files to write it). The mode switch sits in the Agent header like Codex's, and " +
+                "in Settings → Agent. The working indicator now names the model (\"Working with " +
+                "Gemini 3.8 Flash…\"), and plan diff headers are monospace like Codex's. What Codex " +
+                "already had here: agent coding, diff review, terminal, multi-session, GitHub posting. " +
+                "What v3.5 deliberately does NOT copy: Codex's full-auto disk writes and cloud " +
+                "sandbox environments — disk writes always need your tap (her tap-gate rule), and a " +
+                "phone has no cloud sandbox. What v3.5 still does NOT do: run gradle / npm / node / " +
+                "python / git on the phone (those binaries do not exist on a phone), full LSP servers, " +
+                "or WhatsApp control. Every change still needs your tap, except scheduled tasks you " +
+                "created yourself.",
             fontSize = 13.sp
         )
     }

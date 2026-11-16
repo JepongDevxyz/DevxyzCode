@@ -157,6 +157,9 @@ fun DevxyzCodeApp(
     var githubToken by remember { mutableStateOf(SettingsStore.loadGithubToken(context)) }
     var announceRepo by remember { mutableStateOf(SettingsStore.loadAnnounceRepo(context)) }
 
+    // v3.5 (Codex): approval mode — Suggest (default) or Auto.
+    var approvalMode by remember { mutableStateOf(SettingsStore.loadApprovalMode(context)) }
+
     // v3.1: model list follows the provider (Coarena vs APInex).
     val models = remember(baseUrl) { ProviderSetup.modelsFor(baseUrl) }
 
@@ -368,6 +371,18 @@ fun DevxyzCodeApp(
                     editorDirty = true
                     editorStatus = "Code applied to editor — tap Save in Files to write it."
                     tab = 1
+                },
+                approvalMode = approvalMode,
+                onApprovalModeChange = {
+                    approvalMode = it
+                    SettingsStore.saveApprovalMode(context, it)
+                },
+                // v3.5 (Codex Auto): into the editor WITHOUT switching tabs —
+                // disk writes still need her Save tap in Files.
+                onAutoApplyCode = { code ->
+                    editorText = code
+                    editorDirty = true
+                    editorStatus = "Auto-applied to editor — tap Save in Files to write it."
                 },
                 // v3.3: multi-file plan — review each diff first, then one tap
                 // writes the files. New files are created in the picked folder.
@@ -636,6 +651,11 @@ fun DevxyzCodeApp(
                 onAutoSaveSkillsChange = {
                     autoSaveSkills = it
                     SettingsStore.saveAutoSaveSkills(context, it)
+                },
+                approvalMode = approvalMode,
+                onApprovalModeChange = {
+                    approvalMode = it
+                    SettingsStore.saveApprovalMode(context, it)
                 },
                 onSave = {
                     SettingsStore.save(context, baseUrl, apiKey, model)

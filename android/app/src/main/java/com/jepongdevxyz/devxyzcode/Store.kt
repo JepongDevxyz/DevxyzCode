@@ -254,6 +254,7 @@ object SettingsStore {
     private const val KEY_MODEL = "model"
     private const val KEY_RUNS = "runs"
     private const val KEY_THEME = "theme_mode"
+    private const val KEY_APPROVAL_MODE = "approval_mode"
 
     /** v3.4: "system" (follows the phone), "dark", or "light". */
     fun loadThemeMode(context: Context): String =
@@ -263,6 +264,19 @@ object SettingsStore {
     fun saveThemeMode(context: Context, mode: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(KEY_THEME, mode)
+            .apply()
+    }
+
+    /** v3.5 (Codex-style approval modes): "suggest" (default — code is
+     * proposed, she taps Preview / Apply all) or "auto" (single-file code
+     * goes straight to the editor; disk writes still need her tap). */
+    fun loadApprovalMode(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_APPROVAL_MODE, "suggest") ?: "suggest"
+
+    fun saveApprovalMode(context: Context, mode: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_APPROVAL_MODE, mode)
             .apply()
     }
 
