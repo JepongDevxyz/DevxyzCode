@@ -34,6 +34,7 @@ Cursor / OpenCode / OpenClaw / Hermes / Harness, sa Devxyz branding.
 - Multi-file plan + vision (v3.3): sagot ng AI na maraming files, may diff preview bawat isa, isang tap lang ang Apply all (bago at lumang files); mag-attach ng image at makikita ito ng Gemini model. Validation = buksan ang mga binagong file sa Files/editor — hindi kayang makita ng Terminal ang project folder (SAF), kaya walang terminal build/validate doon
 - Professional UI, no overlapping (v3.4): lahat ng chip rows nag-wrap na (hindi na napi-squish ang 'Kimi K3' o nagiging 'Age nt' ang mga tab), scrollable pill tab bar sa baba, Agent empty state na may suggestion chips, at Settings na naka-section na may System / Dark / Light theme picker
 - Codex UI + approval modes (v3.5): Suggest (default, tap-gate) at Auto (isang file, diretso sa editor — Save pa rin ang magsusulat sa disk); mode switch sa Agent header at sa Settings, working indicator na may pangalan ng model, monospace diff headers
+- Public release (v3.6): first-run onboarding (welcome → provider setup → project folder, lahat puwedeng i-skip), public defaults (walang personal na repo na naka-default), at PRIVACY.md para sa Play Store
 
 **Ano ang HINDI pa rin niya ginagawa — by design:**
 - Hindi siya nagpapatakbo ng shell commands o builds nang mag-isa (Terminal tab lang, ikaw ang magta-tap ng Run), at hindi siya nagsusulat ng files nang hindi mo ina-approve
