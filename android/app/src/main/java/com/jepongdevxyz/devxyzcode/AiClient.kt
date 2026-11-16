@@ -23,6 +23,7 @@ data class AiChoice(val message: AiMsg)
 @Serializable
 data class AiResp(val choices: List<AiChoice> = emptyList())
 
+@Serializable
 data class ChatMessage(val role: String, val content: String)
 
 object AiClient {
