@@ -190,3 +190,9 @@ exact local file via the GitHub web UI instead of describing edits.
   with a Google account + subscription, via an undocumented internal endpoint).
   No hacky internal-endpoint integration was built. Its agent-first coding is
   what DevxyzCode's multi-session Agent + Terminal + diff preview already do.
+
+## v3.3.0 — Multi-file Agent plan + Vision (2026-11-16, her order "nagagawa ng aistudio at antigravity e kayang gawin ng DevxyzCode" — capabilities, not just presets)
+- **Multi-file plan (Antigravity-style agent):** the AI answers with one ```lang:relative/path/File.ext block per file. A "Show plan (N files)" button on the reply opens one card per file — EDIT or NEW badge, +/- line counts, scrollable diff vs the current file (DiffUtil) — and one tap on "Apply all (N)" writes them all (existing files via ProjectStore.writeText, new files created with any missing parent folders via ProjectStore.createFile). "Open in Files" opens the first changed file in the editor for validation. The tap-gate stays: nothing is written before Apply all.
+- **Build-from-prompt scaffolding:** the same machinery — when she asks for a new app/project, the system prompt tells the AI to output EVERY file with full relative paths, so the whole project is created in one Apply all.
+- **Vision (AI Studio multimodal):** an Attach image button in the Agent composer (GetContent image/*, downscaled to max 1024px / JPEG 85 / Base64 on-device). The image rides the newest user message as an OpenAI-style image_url part (AiClient.chat imageBase64 param); Gemini models read it. The image is cleared after the send.
+- **Honest correction to the promised "Terminal validate":** the sandboxed Terminal runs in the app's filesDir and cannot see the SAF project folder, so terminal validation of applied files is NOT possible. Validation in v3.3 = review each diff in the plan + open the changed files in Files/editor. No gradle/npm/node/python/git on the phone (unchanged honest gap).

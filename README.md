@@ -31,6 +31,7 @@ Cursor / OpenCode / OpenClaw / Hermes / Harness, sa Devxyz branding.
 - Scheduled tasks (OpenClaw Automations) at Harness-style pipeline steps na may evidence-based run records
 - Announce tab (v3.2): mag-connect sa GitHub gamit ang sariling Personal Access Token (naka-encrypt), tapos mag-post ng Issue o mag-publish ng Release sa kahit anong repo — may AI Draft pa ng announcement text. Walang pino-post nang hindi mo tina-tap
 - AI Studio preset (v3.2): Google Gemini API (aistudio.google.com/apikey) — gemini-3.8-flash at iba pa, BYOK din. Antigravity: walang public API kaya hindi siya puwedeng idagdag bilang provider; yung agent-style coding niya, ginagawa na ng Agent tab
+- Multi-file plan + vision (v3.3): sagot ng AI na maraming files, may diff preview bawat isa, isang tap lang ang Apply all (bago at lumang files); mag-attach ng image at makikita ito ng Gemini model. Validation = buksan ang mga binagong file sa Files/editor — hindi kayang makita ng Terminal ang project folder (SAF), kaya walang terminal build/validate doon
 
 **Ano ang HINDI pa rin niya ginagawa — by design:**
 - Hindi siya nagpapatakbo ng shell commands o builds nang mag-isa (Terminal tab lang, ikaw ang magta-tap ng Run), at hindi siya nagsusulat ng files nang hindi mo ina-approve
