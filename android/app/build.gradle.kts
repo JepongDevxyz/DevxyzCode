@@ -13,8 +13,8 @@ android {
         applicationId = "com.jepongdevxyz.devxyzcode"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "2.1.0"
+        versionCode = 4
+        versionName = "3.0.0"
     }
 
     buildTypes {
@@ -59,6 +59,9 @@ dependencies {
 
     // v2.1: branded splash screen (Android 12+ SplashScreen API, backported).
     implementation("androidx.core:core-splashscreen:1.0.1")
+
+    // v3: background scheduled tasks + Telegram polling (WorkManager).
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
