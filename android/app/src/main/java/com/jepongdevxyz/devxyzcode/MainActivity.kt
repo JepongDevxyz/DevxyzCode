@@ -3,6 +3,7 @@ package com.jepongdevxyz.devxyzcode
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
@@ -27,6 +28,8 @@ import androidx.compose.ui.platform.LocalContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        // v2.1: show the branded splash screen, then switch to the app theme.
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         setContent {
             DevxyzCodeTheme {
