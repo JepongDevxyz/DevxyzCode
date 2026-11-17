@@ -13,8 +13,8 @@ android {
         applicationId = "com.jepongdevxyz.devxyzcode"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "3.9.1"
+        versionCode = 17
+        versionName = "3.9.2"
     }
 
     buildTypes {
