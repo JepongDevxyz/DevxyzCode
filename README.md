@@ -39,6 +39,7 @@ Cursor / OpenCode / OpenClaw / Hermes / Harness, sa Devxyz branding.
 - Usable, like theirs (v3.7.0): hindi na naka-lock ang onboarding (malaking Skip sa bawat step), no-key banner sa Agent na may one-tap papuntang Settings, at Stop button kapag nag-hang ang reply
 - 100% copy ng 9 apps (v3.8.0): Plan mode, @-mention at / commands, AGENTS.md rules, checkpoints bago mag-Apply, Ask mode + /review, context meter, effort selector, at session polish (auto-title, Rename/Fork, search)
 - Git + Live Preview (v3.9.0): Git tab (Status / Commit / Branch / PR sa GitHub API, walang git binary), Live Preview tab (HTML app sa WebView + AI review ng screenshot), top-p / top-k model settings, auto-compaction, at session token total
+- Gawan ng paraan, pure mobile controls lang (v3.9.1): inline AI edit sa Files editor (select text → describe → diff → Apply), voice input + read-aloud (mic sa composer, Listen/Stop sa replies), per-hunk accept/reject sa diff preview, at notification pag tapos na ang reply habang naka-background ang app
 
 **Ano ang HINDI pa rin niya ginagawa — by design:**
 - Hindi siya nagpapatakbo ng shell commands o builds nang mag-isa (Terminal tab lang, ikaw ang magta-tap ng Run), at hindi siya nagsusulat ng files nang hindi mo ina-approve
