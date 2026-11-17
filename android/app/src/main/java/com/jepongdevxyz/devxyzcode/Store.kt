@@ -132,6 +132,18 @@ object ProjectStore {
         throw Exception("Could not open file.")
     }
 
+    /** v3.9: raw bytes of a file (images for the Preview copy). Capped at
+     * [maxBytes]; throws when the file is bigger or unreadable. */
+    fun readBytes(context: Context, uriString: String, maxBytes: Int = 2 * 1024 * 1024): ByteArray {
+        val uri = Uri.parse(uriString)
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            val bytes = input.readBytes()
+            if (bytes.size > maxBytes) throw Exception("File is over ${maxBytes / 1024} KB.")
+            return bytes
+        }
+        throw Exception("Could not open file.")
+    }
+
     fun writeText(context: Context, uriString: String, text: String) {
         val uri = Uri.parse(uriString)
         context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
@@ -414,6 +426,43 @@ object SettingsStore {
     fun saveEffort(context: Context, effort: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(KEY_EFFORT, effort)
+            .apply()
+    }
+
+    // v3.9: AI Studio Run-settings parity — top-p / top-k (blank = provider
+    // default) + auto-compact when the context meter is almost full.
+    private const val KEY_TOP_P = "top_p"
+    private const val KEY_TOP_K = "top_k"
+    private const val KEY_AUTO_COMPACT = "auto_compact"
+
+    fun loadTopP(context: Context): Double? =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_TOP_P, "")?.toDoubleOrNull()
+
+    fun saveTopP(context: Context, value: Double?) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_TOP_P, value?.toString() ?: "")
+            .apply()
+    }
+
+    fun loadTopK(context: Context): Int? =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_TOP_K, "")?.toIntOrNull()
+
+    fun saveTopK(context: Context, value: Int?) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_TOP_K, value?.toString() ?: "")
+            .apply()
+    }
+
+    /** Default OFF (her rule: toggles off on first run). */
+    fun loadAutoCompact(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_AUTO_COMPACT, false)
+
+    fun saveAutoCompact(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_AUTO_COMPACT, enabled)
             .apply()
     }
     fun loadTelegramMessages(context: Context): List<TelegramMessage> = loadList(context, KEY_TELEGRAM)

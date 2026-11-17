@@ -1,6 +1,15 @@
 package com.jepongdevxyz.devxyzcode
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.net.Uri
+import android.util.Base64
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.compose.ui.viewinterop.AndroidView
+import java.io.ByteArrayOutputStream
+import java.io.File
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -172,7 +181,11 @@ fun AgentScreen(
     onCreateGoal: (String) -> String,
     onSessionFirstMessage: (String) -> Unit,
     onRenameSession: (String, String) -> Unit,
-    onForkSession: (String) -> Unit
+    onForkSession: (String) -> Unit,
+    // v3.9: top-p / top-k (AI Studio Run settings) + auto-compact toggle.
+    topP: Double? = null,
+    topK: Int? = null,
+    autoCompact: Boolean = false
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -204,6 +217,8 @@ fun AgentScreen(
     // v3.8: context meter breakdown toggle + /compact confirmation.
     var showContextBreakdown by remember { mutableStateOf(false) }
     var pendingCompact by remember { mutableStateOf(false) }
+    // v3.9: auto-compact guard — compact once per 90% crossing, reset under 80%.
+    var autoCompacted by remember { mutableStateOf(false) }
     // v3.8: session search + long-press manage (Rename / Fork).
     var sessionQuery by remember { mutableStateOf("") }
     var sessionMenuFor by remember { mutableStateOf<String?>(null) }
@@ -282,7 +297,9 @@ fun AgentScreen(
                     systemPrompt = system,
                     imageBase64 = pendingImageBase64,
                     temperature = effortTemperature,
-                    maxTokens = effortMaxTokens
+                    maxTokens = effortMaxTokens,
+                    topP = topP,
+                    topK = topK
                 )
                 history.add(ChatMessage("assistant", reply))
                 // v3.8: Plan mode — the reply IS the plan; keep it for the card.
@@ -560,10 +577,42 @@ fun AgentScreen(
                 if (showContextBreakdown) {
                     Text(
                         "System prompt ≈${systemChars / 4} tokens · Attached files ≈${attachedChars / 4} tokens · Conversation ≈${historyChars / 4} tokens. " +
+                            "Session total ≈$tokens tokens · ${history.size} messages. " +
                             "Cost is shown only when the provider returns usage in its reply.",
                         fontSize = 12.sp
                     )
                 }
+            }
+        }
+        // v3.9: auto-compaction (Claude Code /compact + auto, OpenCode auto).
+        // At 90%+ the card offers Compact (tap-gated); when the Settings
+        // toggle is ON it compacts once per crossing, on its own.
+        run {
+            val totalChars = SYSTEM_PROMPT_BASE.length + rulesText.length +
+                memoryFacts.sumOf { it.text.length } +
+                history.sumOf { it.content.length } +
+                attachedContents.values.sumOf { it.length }
+            val pctNow = ((totalChars / 4) * 100 / 128000).coerceIn(0, 100)
+            LaunchedEffect(pctNow, autoCompact) {
+                if (autoCompact && pctNow >= 90 && !autoCompacted) {
+                    autoCompacted = true
+                    runCompact()
+                }
+                if (pctNow < 80) autoCompacted = false
+            }
+            if (pctNow >= 90) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            "Context is almost full ($pctNow%) — older turns will be summarised into a short summary.",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Button(onClick = { runCompact() }) { Text("Compact now") }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -2286,6 +2335,13 @@ fun SettingsScreen(
     // v3.5 (Codex): approval mode.
     approvalMode: String,
     onApprovalModeChange: (String) -> Unit,
+    // v3.9: AI Studio Run settings (top-p / top-k) + auto-compact toggle.
+    topP: String,
+    onTopPChange: (String) -> Unit,
+    topK: String,
+    onTopKChange: (String) -> Unit,
+    autoCompact: Boolean,
+    onAutoCompactChange: (Boolean) -> Unit,
     onSave: () -> Unit
 ) {
     var saved by remember { mutableStateOf("") }
@@ -2360,6 +2416,31 @@ fun SettingsScreen(
                 Text(if (m == model) "● $m" else m)
             }
         }
+        // v3.9: AI Studio Run settings — top-p / top-k (blank = provider
+        // default). Same fields the Agent sends with every chat request.
+        Spacer(Modifier.height(8.dp))
+        Text("Model parameters (AI Studio Run settings)", fontWeight = FontWeight.Bold)
+        Text("Blank = the provider's default. Top-p 0–1, top-k whole number.", fontSize = 13.sp)
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = topP,
+                onValueChange = onTopPChange,
+                label = { Text("Top-p") },
+                modifier = Modifier.weight(1f),
+                maxLines = 1
+            )
+            OutlinedTextField(
+                value = topK,
+                onValueChange = onTopKChange,
+                label = { Text("Top-k") },
+                modifier = Modifier.weight(1f),
+                maxLines = 1
+            )
+        }
         Spacer(Modifier.height(12.dp))
         Text("GitHub (Announce tab)", fontSize = 15.sp, fontWeight = FontWeight.Bold)
         Text("Personal Access Token with repo scope, for posting Issues and Releases from the Announce tab. The token is stored encrypted on this device. Create one at github.com → Settings → Developer settings → Personal access tokens.", fontSize = 13.sp)
@@ -2427,6 +2508,21 @@ fun SettingsScreen(
             Switch(checked = autoSaveSkills, onCheckedChange = onAutoSaveSkillsChange)
         }
         Spacer(Modifier.height(8.dp))
+        // v3.9: auto-compaction (Claude Code / OpenCode auto-compact).
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Auto-compact when context is almost full", fontWeight = FontWeight.Bold)
+                Text(
+                    "When ON, the Agent summarises older turns on its own once the context meter passes 90%. When OFF, it asks you first with a Compact card. Default OFF.",
+                    fontSize = 13.sp
+                )
+            }
+            Switch(checked = autoCompact, onCheckedChange = onAutoCompactChange)
+        }
+        Spacer(Modifier.height(8.dp))
         Button(
             onClick = {
                 onSave()
@@ -2439,7 +2535,7 @@ fun SettingsScreen(
             Text(saved, fontSize = 13.sp)
         }
         Spacer(Modifier.height(16.dp))
-        Text("DevxyzCode v3.6.0", fontWeight = FontWeight.Bold)
+        Text("DevxyzCode v3.9.0", fontWeight = FontWeight.Bold)
         Text("Package com.jepongdevxyz.devxyzcode · minSdk 26 · targetSdk 35", fontSize = 13.sp)
         Text(
             "Privacy: your API key, Telegram token, and GitHub token stay encrypted on this device " +
@@ -2449,13 +2545,564 @@ fun SettingsScreen(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "What v3.6 adds (public release, her order): first-run onboarding — welcome, provider " +
-                "setup (BYOK), optional project folder, every step skippable — so a new user is never " +
-                "stuck on a blank screen; and public defaults (the announce repo no longer defaults " +
-                "to her own repo). What v3.6 still does NOT do: run gradle / npm / node / python / git " +
-                "on the phone (those binaries do not exist on a phone), full LSP servers, or WhatsApp " +
-                "control. Every change still needs your tap, except scheduled tasks you created yourself.",
+            "What v3.9 adds: a Git tab (Status / Commit / Branch / PR via the GitHub API — no git binary " +
+                "on the phone), a Live Preview tab (your HTML app rendered in-app, and the Agent can " +
+                "review a screenshot of it), top-p / top-k model settings (AI Studio Run settings), " +
+                "auto-compaction when the context meter is almost full, and a session token total. " +
+                "What it still does NOT do: run gradle / npm / node / python / git on the phone (those " +
+                "binaries do not exist on a phone), cloud agents, worktrees, full LSP servers, or " +
+                "WhatsApp control. Every change still needs your tap, except scheduled tasks you created yourself.",
             fontSize = 13.sp
         )
+    }
+}
+
+// v3.9: Git tab — Status / Commit / Branch / PR through the GitHub Git Data
+// API (Antigravity Review/VCS pane + Codex PR creation, phone-sized: no git
+// binary on a phone). A commit NEVER deletes; binary files are skipped.
+private val GIT_BINARY_EXTS = setOf(
+    "png", "jpg", "jpeg", "gif", "webp", "ico", "apk", "aab", "zip",
+    "mp3", "mp4", "ttf", "woff", "woff2", "pdf", "bin", "so", "dex"
+)
+
+@Composable
+fun GitScreen(
+    modifier: Modifier = Modifier,
+    repo: String,
+    onRepoChange: (String) -> Unit,
+    githubToken: String,
+    projectFiles: List<ProjectFile>,
+    baseUrl: String,
+    apiKey: String,
+    model: String,
+    onOpenSettings: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var repoText by remember { mutableStateOf(repo) }
+    var branch by remember { mutableStateOf("") }
+    var branches by remember { mutableStateOf<List<String>>(emptyList()) }
+    var defaultBranch by remember { mutableStateOf("") }
+    var headSha by remember { mutableStateOf("") }
+    var changed by remember { mutableStateOf<List<String>>(emptyList()) }
+    var added by remember { mutableStateOf<List<String>>(emptyList()) }
+    var deleted by remember { mutableStateOf<List<String>>(emptyList()) }
+    var skipped by remember { mutableStateOf(0) }
+    var statusText by remember { mutableStateOf("Tap Refresh status to compare your folder with the repo.") }
+    var commitMessage by remember { mutableStateOf("") }
+    var newBranchName by remember { mutableStateOf("") }
+    var prTitle by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf("") }
+
+    fun refreshStatus() {
+        if (githubToken.isBlank()) {
+            statusText = "Add your GitHub token in Settings first."
+            return
+        }
+        if (repoText.isBlank()) {
+            statusText = "Type the repo (owner/name) above first."
+            return
+        }
+        busy = true
+        result = ""
+        scope.launch {
+            try {
+                val (branchList, branchError) = GitHubClient.getBranches(repoText.trim(), githubToken)
+                if (branchList == null) {
+                    statusText = branchError ?: "Could not read branches."
+                    return@launch
+                }
+                branches = branchList
+                val (default, _) = GitHubClient.getDefaultBranch(repoText.trim(), githubToken)
+                if (!default.isNullOrBlank()) defaultBranch = default
+                if (branch.isBlank()) branch = defaultBranch.ifBlank { branchList.firstOrNull() ?: "main" }
+                val (head, headError) = GitHubClient.getHeadSha(repoText.trim(), branch, githubToken)
+                if (head == null) {
+                    statusText = headError ?: "Could not read branch head."
+                    return@launch
+                }
+                headSha = head
+                val (tree, treeError) = GitHubClient.getBranchTree(repoText.trim(), branch, githubToken)
+                if (tree == null) {
+                    statusText = treeError ?: "Could not read repo tree."
+                    return@launch
+                }
+                val localPaths = projectFiles.filter { !it.isDir }.map { it.relativePath }.toSet()
+                val changedList = mutableListOf<String>()
+                val addedList = mutableListOf<String>()
+                var skippedCount = 0
+                for (file in projectFiles) {
+                    if (file.isDir) continue
+                    val ext = file.relativePath.substringAfterLast('.', "").lowercase()
+                    if (ext in GIT_BINARY_EXTS || file.size > 200 * 1024) {
+                        skippedCount++
+                        continue
+                    }
+                    val bytes = try {
+                        ProjectStore.readText(context, file.uriString).toByteArray(Charsets.UTF_8)
+                    } catch (e: Exception) {
+                        skippedCount++
+                        continue
+                    }
+                    val sha = GitHubClient.gitBlobSha(bytes)
+                    val remoteSha = tree[file.relativePath]
+                    if (remoteSha == null) addedList.add(file.relativePath)
+                    else if (remoteSha != sha) changedList.add(file.relativePath)
+                }
+                changed = changedList.sorted()
+                added = addedList.sorted()
+                deleted = tree.keys.filter { it !in localPaths }.sorted()
+                skipped = skippedCount
+                statusText = "Branch $branch · ${changed.size} changed · ${added.size} new · " +
+                    "${deleted.size} deleted (listed, never committed) · $skipped skipped (binary/large)."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun commit() {
+        val files = mutableMapOf<String, String>()
+        for (path in changed + added) {
+            val file = projectFiles.firstOrNull { it.relativePath == path } ?: continue
+            try {
+                files[path] = ProjectStore.readText(context, file.uriString)
+            } catch (e: Exception) {
+                result = "Could not read $path: ${e.message}"
+                return
+            }
+        }
+        if (files.isEmpty()) {
+            result = "Nothing to commit."
+            return
+        }
+        if (commitMessage.isBlank()) {
+            result = "Write a commit message first (or tap AI message)."
+            return
+        }
+        busy = true
+        scope.launch {
+            try {
+                val res = GitHubClient.commitFiles(repoText.trim(), branch, githubToken, files, commitMessage.trim())
+                if (res.error != null) {
+                    result = "Commit failed: ${res.error}"
+                } else {
+                    result = "Committed ${files.size} file(s) to $branch." +
+                        (if (!res.url.isNullOrBlank()) " ${res.url}" else "")
+                    commitMessage = ""
+                    changed = emptyList()
+                    added = emptyList()
+                    statusText = "Committed — tap Refresh status to re-check."
+                }
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun aiMessage() {
+        if (apiKey.isBlank()) {
+            result = "Add your API key in Settings first (BYOK)."
+            return
+        }
+        if (changed.isEmpty() && added.isEmpty()) {
+            result = "Nothing changed — refresh status first."
+            return
+        }
+        busy = true
+        scope.launch {
+            try {
+                val reply = AiClient.chat(
+                    baseUrl = baseUrl,
+                    apiKey = apiKey,
+                    model = model,
+                    history = listOf(
+                        ChatMessage(
+                            "user",
+                            "Write a short conventional-commit message (one line, e.g. 'feat: add login screen') for these changes. Changed: ${changed.joinToString(", ")}. New: ${added.joinToString(", ")}. Reply with the message only, no other text."
+                        )
+                    ),
+                    systemPrompt = "You write git commit messages. Reply with the message only."
+                )
+                commitMessage = reply.trim().lines().firstOrNull()?.trim() ?: ""
+            } catch (e: Exception) {
+                result = "Could not draft a message: ${e.message}"
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun createBranch() {
+        val name = newBranchName.trim()
+        if (name.isBlank() || headSha.isBlank()) {
+            result = "Pick a branch name and refresh status first."
+            return
+        }
+        busy = true
+        scope.launch {
+            try {
+                val res = GitHubClient.createBranch(repoText.trim(), githubToken, name, headSha)
+                if (res.error != null) {
+                    result = "Could not create branch: ${res.error}"
+                } else {
+                    result = "Branch $name created."
+                    branches = branches + name
+                    branch = name
+                    newBranchName = ""
+                    statusText = "On branch $name — tap Refresh status to compare."
+                }
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun createPr() {
+        if (branch.isBlank() || defaultBranch.isBlank() || branch == defaultBranch) {
+            result = "Switch to a non-default branch first, then open a PR into $defaultBranch."
+            return
+        }
+        val title = prTitle.trim().ifBlank { "Merge $branch into $defaultBranch" }
+        busy = true
+        scope.launch {
+            try {
+                val res = GitHubClient.createPull(repoText.trim(), githubToken, branch, defaultBranch, title, "")
+                result = if (res.error != null) "Could not open PR: ${res.error}"
+                else "PR opened: ${res.url ?: ""}"
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    Column(modifier = modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
+        Text("Git", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text(
+            "Commit, branch and open PRs from the app — the GitHub API, no git binary. " +
+                "Your picked folder is the repo root. A commit never deletes files.",
+            fontSize = 13.sp
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = repoText,
+            onValueChange = {
+                repoText = it
+                onRepoChange(it)
+            },
+            label = { Text("Repo (owner/name)") },
+            modifier = Modifier.fillMaxWidth(),
+            maxLines = 1
+        )
+        if (githubToken.isBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text("No GitHub token yet — Status, Commit and PR all need one.", fontSize = 13.sp)
+            Spacer(Modifier.height(4.dp))
+            OutlinedButton(onClick = onOpenSettings) { Text("Add GitHub token in Settings") }
+        }
+        Spacer(Modifier.height(12.dp))
+        if (branches.isNotEmpty()) {
+            Text("Branches", fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                branches.forEach { b ->
+                    OutlinedButton(onClick = {
+                        branch = b
+                        refreshStatus()
+                    }) { Text(if (b == branch) "● $b" else b, fontSize = 12.sp) }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = newBranchName,
+                onValueChange = { newBranchName = it },
+                label = { Text("New branch name") },
+                modifier = Modifier.weight(1f),
+                maxLines = 1
+            )
+            OutlinedButton(onClick = { createBranch() }, enabled = !busy) { Text("Create") }
+        }
+        Spacer(Modifier.height(12.dp))
+        Button(onClick = { refreshStatus() }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+            Text(if (busy) "Working…" else "Refresh status")
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(statusText, fontSize = 13.sp)
+        if (changed.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text("Changed", fontWeight = FontWeight.Bold)
+            changed.forEach { Text(it, fontSize = 13.sp, fontFamily = FontFamily.Monospace) }
+        }
+        if (added.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text("New", fontWeight = FontWeight.Bold)
+            added.forEach { Text(it, fontSize = 13.sp, fontFamily = FontFamily.Monospace) }
+        }
+        if (deleted.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text("Deleted on the repo (listed only — a commit never deletes)", fontWeight = FontWeight.Bold)
+            deleted.forEach { Text(it, fontSize = 13.sp, fontFamily = FontFamily.Monospace) }
+        }
+        if (skipped > 0) {
+            Spacer(Modifier.height(8.dp))
+            Text("$skipped file(s) skipped (binary or over 200 KB).", fontSize = 13.sp)
+        }
+        if (changed.isNotEmpty() || added.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = commitMessage,
+                onValueChange = { commitMessage = it },
+                label = { Text("Commit message") },
+                modifier = Modifier.fillMaxWidth(),
+                maxLines = 3
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(onClick = { aiMessage() }, enabled = !busy, modifier = Modifier.weight(1f)) {
+                    Text("AI message")
+                }
+                Button(onClick = { commit() }, enabled = !busy, modifier = Modifier.weight(1f)) {
+                    Text("Commit ${changed.size + added.size} file(s)")
+                }
+            }
+        }
+        if (branch.isNotBlank() && defaultBranch.isNotBlank() && branch != defaultBranch) {
+            Spacer(Modifier.height(12.dp))
+            Text("Pull request into $defaultBranch", fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            OutlinedTextField(
+                value = prTitle,
+                onValueChange = { prTitle = it },
+                label = { Text("PR title (blank = Merge $branch)") },
+                modifier = Modifier.fillMaxWidth(),
+                maxLines = 1
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = { createPr() }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                Text("Create PR")
+            }
+        }
+        if (result.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Text(result, fontSize = 13.sp)
+        }
+    }
+}
+
+/** v3.9: bitmap → downscaled JPEG Base64 (same 1024px / JPEG 85 rule as v3.3 vision). */
+private fun downscaleBitmapToBase64(bmp: Bitmap): String? {
+    val out = ByteArrayOutputStream()
+    bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+    val bytes = out.toByteArray()
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    val w = bounds.outWidth
+    val h = bounds.outHeight
+    if (w <= 0 || h <= 0) return null
+    var sample = 1
+    while (maxOf(w, h) / sample > 1024) sample *= 2
+    val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
+    val small = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts) ?: return null
+    val out2 = ByteArrayOutputStream()
+    small.compress(Bitmap.CompressFormat.JPEG, 85, out2)
+    small.recycle()
+    return Base64.encodeToString(out2.toByteArray(), Base64.NO_WRAP)
+}
+
+// v3.9: Live Preview — AI Studio Build preview + Hermes preview rail +
+// Cursor Design mode, phone-sized. The HTML app renders in a WebView; the
+// Agent can review a screenshot of it (vision).
+@Composable
+fun PreviewScreen(
+    modifier: Modifier = Modifier,
+    projectFiles: List<ProjectFile>,
+    baseUrl: String,
+    apiKey: String,
+    model: String
+) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val htmlFiles = remember(projectFiles) {
+        projectFiles.filter { !it.isDir && it.name.endsWith(".html", ignoreCase = true) }
+    }
+    var selected by remember { mutableStateOf<ProjectFile?>(null) }
+    var previewUrl by remember { mutableStateOf<String?>(null) }
+    var status by remember { mutableStateOf("") }
+    var reviewText by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var webView by remember { mutableStateOf<WebView?>(null) }
+
+    fun openPreview() {
+        val file = selected ?: run {
+            status = "Pick an .html file first."
+            return
+        }
+        busy = true
+        status = "Copying project files for preview…"
+        scope.launch {
+            try {
+                val previewDir = File(context.filesDir, "preview")
+                if (previewDir.exists()) previewDir.deleteRecursively()
+                previewDir.mkdirs()
+                var copied = 0
+                var skipped = 0
+                withContext(Dispatchers.IO) {
+                    for (pf in projectFiles) {
+                        if (pf.isDir) continue
+                        val dest = File(previewDir, pf.relativePath)
+                        try {
+                            dest.parentFile?.mkdirs()
+                            val bytes = ProjectStore.readBytes(context, pf.uriString)
+                            dest.writeBytes(bytes)
+                            copied++
+                        } catch (e: Exception) {
+                            skipped++
+                        }
+                    }
+                }
+                previewUrl = "file://" + File(previewDir, file.relativePath).absolutePath
+                status = "Preview ready — $copied file(s) copied, $skipped skipped."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun reviewScreenshot() {
+        val view = webView ?: run {
+            status = "Open the preview first."
+            return
+        }
+        if (apiKey.isBlank()) {
+            status = "Add your API key in Settings first (BYOK)."
+            return
+        }
+        busy = true
+        status = "Capturing the preview…"
+        scope.launch {
+            try {
+                val bitmap = Bitmap.createBitmap(
+                    view.width.coerceAtLeast(1),
+                    view.height.coerceAtLeast(1),
+                    Bitmap.Config.ARGB_8888
+                )
+                val canvas = Canvas(bitmap)
+                view.draw(canvas)
+                val base64 = withContext(Dispatchers.IO) { downscaleBitmapToBase64(bitmap) }
+                bitmap.recycle()
+                if (base64 == null) {
+                    status = "Could not capture the preview."
+                    return@launch
+                }
+                val reply = AiClient.chat(
+                    baseUrl = baseUrl,
+                    apiKey = apiKey,
+                    model = model,
+                    history = listOf(
+                        ChatMessage(
+                            "user",
+                            "Review this screenshot of my web app: what do you see, what looks wrong (layout, overlap, readability), and what should I fix first? Short first, then the list."
+                        )
+                    ),
+                    systemPrompt = "You are DevxyzCode, a coding assistant. Review a screenshot of the user's web app.",
+                    imageBase64 = base64
+                )
+                reviewText = reply
+                status = "Review ready."
+            } catch (e: Exception) {
+                status = "Review failed: ${e.message}"
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
+        Text("Preview", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text(
+            "Your HTML app, rendered live in the app — like AI Studio's Build preview. " +
+                "The Agent can also look at a screenshot of it and tell you what to fix.",
+            fontSize = 13.sp
+        )
+        Spacer(Modifier.height(12.dp))
+        if (htmlFiles.isEmpty()) {
+            Text("No .html files in the picked folder — open a project folder in Files first.", fontSize = 13.sp)
+        } else {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                htmlFiles.forEach { file ->
+                    OutlinedButton(onClick = { selected = file }) {
+                        Text(if (file == selected) "● ${file.relativePath}" else file.relativePath, fontSize = 12.sp)
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(onClick = { openPreview() }, enabled = !busy, modifier = Modifier.weight(1f)) {
+                    Text("Open preview")
+                }
+                OutlinedButton(onClick = { webView?.reload() }, enabled = previewUrl != null, modifier = Modifier.weight(1f)) {
+                    Text("Reload")
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { reviewScreenshot() },
+                enabled = !busy && previewUrl != null,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Ask AI to review this screen")
+            }
+        }
+        if (status.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text(status, fontSize = 13.sp)
+        }
+        if (previewUrl != null) {
+            Spacer(Modifier.height(8.dp))
+            AndroidView(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        settings.javaScriptEnabled = true
+                        settings.allowFileAccess = true
+                        settings.allowFileAccessFromFileURLs = true
+                        settings.allowUniversalAccessFromFileURLs = false
+                        webViewClient = WebViewClient()
+                        webView = this
+                    }
+                },
+                update = { view ->
+                    val url = previewUrl
+                    if (url != null && view.url != url) view.loadUrl(url)
+                }
+            )
+        }
+        if (reviewText.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 220.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(reviewText, fontSize = 13.sp)
+            }
+        }
     }
 }

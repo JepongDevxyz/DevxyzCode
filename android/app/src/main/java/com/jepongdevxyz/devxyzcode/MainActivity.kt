@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Code
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.filled.Mail
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -243,6 +245,11 @@ fun DevxyzCodeApp(
     // v3.8: effort selector (Antigravity/Codex reasoning effort, phone-sized).
     var effort by remember { mutableStateOf(SettingsStore.loadEffort(context)) }
 
+    // v3.9: top-p / top-k (AI Studio Run settings) + auto-compact toggle.
+    var topPText by remember { mutableStateOf(SettingsStore.loadTopP(context)?.toString() ?: "") }
+    var topKText by remember { mutableStateOf(SettingsStore.loadTopK(context)?.toString() ?: "") }
+    var autoCompact by remember { mutableStateOf(SettingsStore.loadAutoCompact(context)) }
+
     // v3.8: AGENTS.md / CLAUDE.md rules from the picked project folder.
     var rulesText by remember { mutableStateOf("") }
     var rulesFileName by remember { mutableStateOf("") }
@@ -396,7 +403,8 @@ fun DevxyzCodeApp(
         mutableStateOf(SettingsStore.loadOnboardingDone(context) || apiKey.isNotBlank())
     }
 
-    val tabs = listOf("Agent", "Files", "Runs", "Skills", "Messages", "Terminal", "Announce", "Settings")
+    // v3.9: Git + Preview tabs (Settings moves to index 9).
+    val tabs = listOf("Agent", "Files", "Runs", "Skills", "Messages", "Terminal", "Announce", "Git", "Preview", "Settings")
     val tabIcons = listOf(
         Icons.Filled.Chat,
         Icons.Filled.Folder,
@@ -405,6 +413,8 @@ fun DevxyzCodeApp(
         Icons.Filled.Mail,
         Icons.Filled.Code,
         Icons.Filled.Campaign,
+        Icons.Filled.AccountTree,
+        Icons.Filled.Visibility,
         Icons.Filled.Settings
     )
 
@@ -560,7 +570,7 @@ fun DevxyzCodeApp(
                     editorStatus = "Auto-applied to editor — tap Save in Files to write it."
                 },
                 // v3.7: no-key banner jumps straight to Settings.
-                onOpenSettings = { tab = 7 },
+                onOpenSettings = { tab = 9 },
                 // v3.8: effort, rules, checkpoints, plan state, review, @-mention, export, goal.
                 effort = effort,
                 onEffortChange = {
@@ -569,6 +579,10 @@ fun DevxyzCodeApp(
                 },
                 effortTemperature = when (effort) { "low" -> 0.2; "high" -> 0.7; else -> 0.2 },
                 effortMaxTokens = when (effort) { "low" -> 1024; "high" -> 8192; else -> null },
+                // v3.9: top-p / top-k + auto-compact.
+                topP = topPText.toDoubleOrNull(),
+                topK = topKText.toIntOrNull(),
+                autoCompact = autoCompact,
                 rulesText = rulesText,
                 rulesFileName = rulesFileName,
                 onCreateAgentsMd = {
@@ -913,6 +927,28 @@ fun DevxyzCodeApp(
                 apiKey = apiKey,
                 model = model
             )
+            // v3.9: Git tab (Status / Commit / Branch / PR) + Live Preview.
+            7 -> GitScreen(
+                modifier = Modifier.padding(innerPadding),
+                repo = announceRepo,
+                onRepoChange = {
+                    announceRepo = it
+                    SettingsStore.saveAnnounceRepo(context, it)
+                },
+                githubToken = githubToken,
+                projectFiles = projectFiles,
+                baseUrl = baseUrl,
+                apiKey = apiKey,
+                model = model,
+                onOpenSettings = { tab = 9 }
+            )
+            8 -> PreviewScreen(
+                modifier = Modifier.padding(innerPadding),
+                projectFiles = projectFiles,
+                baseUrl = baseUrl,
+                apiKey = apiKey,
+                model = model
+            )
             else -> SettingsScreen(
                 modifier = Modifier.padding(innerPadding),
                 themeMode = themeMode,
@@ -940,11 +976,23 @@ fun DevxyzCodeApp(
                     approvalMode = it
                     SettingsStore.saveApprovalMode(context, it)
                 },
+                // v3.9: top-p / top-k + auto-compact.
+                topP = topPText,
+                onTopPChange = { topPText = it },
+                topK = topKText,
+                onTopKChange = { topKText = it },
+                autoCompact = autoCompact,
+                onAutoCompactChange = {
+                    autoCompact = it
+                    SettingsStore.saveAutoCompact(context, it)
+                },
                 onSave = {
                     SettingsStore.save(context, baseUrl, apiKey, model)
                     SettingsStore.saveBotToken(context, botToken)
                     SettingsStore.saveGithubToken(context, githubToken)
                     SettingsStore.saveAnnounceRepo(context, announceRepo)
+                    SettingsStore.saveTopP(context, topPText.toDoubleOrNull())
+                    SettingsStore.saveTopK(context, topKText.toIntOrNull())
                 }
             )
         }

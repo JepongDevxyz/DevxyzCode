@@ -20,7 +20,7 @@ import java.net.URL
 data class AiMsg(val role: String, val content: String)
 
 @Serializable
-data class AiReq(val model: String, val messages: List<AiMsg>, val temperature: Double = 0.2, @SerialName("max_tokens") val maxTokens: Int? = null)
+data class AiReq(val model: String, val messages: List<AiMsg>, val temperature: Double = 0.2, @SerialName("max_tokens") val maxTokens: Int? = null, @SerialName("top_p") val topP: Double? = null, @SerialName("top_k") val topK: Int? = null)
 
 @Serializable
 data class AiChoice(val message: AiMsg)
@@ -56,7 +56,10 @@ object AiClient {
         imageBase64: String? = null,
         // v3.8: effort selector (Low/Medium/High) maps to these.
         temperature: Double = 0.2,
-        maxTokens: Int? = null
+        maxTokens: Int? = null,
+        // v3.9: AI Studio Run-settings parity — top-p / top-k (null = default).
+        topP: Double? = null,
+        topK: Int? = null
     ): String = withContext(Dispatchers.IO) {
         val cleanBase = baseUrl.trim().trimEnd('/')
         val url = URL("$cleanBase/chat/completions")
@@ -85,7 +88,7 @@ object AiClient {
         // v3.3: vision — when an image is attached, the newest user message
         // carries it as an OpenAI-style image_url part (Gemini models read it).
         val body = if (imageBase64.isNullOrBlank()) {
-            json.encodeToString(AiReq(model = model, messages = msgs, temperature = temperature, maxTokens = maxTokens))
+            json.encodeToString(AiReq(model = model, messages = msgs, temperature = temperature, maxTokens = maxTokens, topP = topP, topK = topK))
         } else {
             val messagesJson = JSONArray()
             msgs.forEachIndexed { index, msg ->
@@ -113,6 +116,8 @@ object AiClient {
                 .put("model", model)
                 .put("temperature", temperature)
                 .apply { if (maxTokens != null) put("max_tokens", maxTokens) }
+                .apply { if (topP != null) put("top_p", topP) }
+                .apply { if (topK != null) put("top_k", topK) }
                 .put("messages", messagesJson)
                 .toString()
         }
