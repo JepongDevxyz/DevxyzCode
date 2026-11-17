@@ -1,12 +1,19 @@
 package com.jepongdevxyz.devxyzcode
 
+import android.app.Activity
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.net.Uri
+import android.speech.RecognizerIntent
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Base64
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.ui.viewinterop.AndroidView
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -50,6 +57,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -111,6 +119,56 @@ fun parseReviewFindings(reply: String): List<ReviewFinding> {
             text = m.groupValues[4].ifBlank { line }
         )
     }.take(30)
+}
+
+// v3.9.1: per-hunk accept/reject (Cursor / Codex diff review, touch-first).
+/** Split a diff into hunks: maximal runs of consecutive non-UNCHANGED lines. */
+fun splitHunks(diff: List<DiffLine>): List<List<DiffLine>> {
+    val hunks = mutableListOf<MutableList<DiffLine>>()
+    var current: MutableList<DiffLine>? = null
+    for (line in diff) {
+        if (line.kind == DiffKind.UNCHANGED) {
+            current = null
+        } else {
+            if (current == null) {
+                current = mutableListOf()
+                hunks.add(current)
+            }
+            current.add(line)
+        }
+    }
+    return hunks
+}
+
+/** Rebuild the new file text from a diff, keeping only accepted hunks.
+ * UNCHANGED lines are always kept; an accepted hunk contributes its ADDED
+ * lines, a rejected hunk its REMOVED lines. */
+fun applyHunks(diff: List<DiffLine>, accepted: Set<Int>): String {
+    val out = StringBuilder()
+    var hunkIndex = -1
+    var inHunk = false
+    for (line in diff) {
+        if (line.kind == DiffKind.UNCHANGED) {
+            inHunk = false
+            out.append(line.text).append('\n')
+        } else {
+            if (!inHunk) {
+                hunkIndex++
+                inHunk = true
+            }
+            if (hunkIndex in accepted) {
+                if (line.kind == DiffKind.ADDED) out.append(line.text).append('\n')
+            } else {
+                if (line.kind == DiffKind.REMOVED) out.append(line.text).append('\n')
+            }
+        }
+    }
+    return out.toString().trimEnd('\n')
+}
+
+/** v3.9.1: read-aloud speaks prose, not code — strip fenced blocks first. */
+private fun stripCodeForSpeech(text: String): String {
+    return text.replace(Regex("```[\\s\\S]*?```"), " [code] ").trim()
 }
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
@@ -186,7 +244,10 @@ fun AgentScreen(
     // v3.9: top-p / top-k (AI Studio Run settings) + auto-compact toggle.
     topP: Double? = null,
     topK: Int? = null,
-    autoCompact: Boolean = false
+    autoCompact: Boolean = false,
+    // v3.9.1: completion notification (toggle) + foreground check.
+    notifyDone: Boolean = false,
+    isForeground: Boolean = true
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -220,6 +281,56 @@ fun AgentScreen(
     var pendingCompact by remember { mutableStateOf(false) }
     // v3.9: auto-compact guard — compact once per 90% crossing, reset under 80%.
     var autoCompacted by remember { mutableStateOf(false) }
+    // v3.9.1: per-hunk accept/reject — rejected hunk indices (all accepted
+    // by default); resets whenever a new diff arrives (keyed on pendingCode).
+    var rejectedHunks by remember(pendingCode) { mutableStateOf(setOf<Int>()) }
+    // v3.9.1: voice — read-aloud (TTS) + speech-to-text launcher.
+    var speakingIndex by remember { mutableStateOf<Int?>(null) }
+    var tts by remember { mutableStateOf<TextToSpeech?>(null) }
+    var ttsReady by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        tts = TextToSpeech(context) { status ->
+            ttsReady = status == TextToSpeech.SUCCESS
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {}
+                    override fun onDone(utteranceId: String?) {
+                        scope.launch { speakingIndex = null }
+                    }
+                    override fun onError(utteranceId: String?) {
+                        scope.launch { speakingIndex = null }
+                    }
+                })
+            }
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            try { tts?.stop(); tts?.shutdown() } catch (_: Exception) { }
+        }
+    }
+    val speechLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+            if (!spoken.isNullOrBlank()) {
+                input = if (input.isBlank()) spoken else "$input $spoken"
+            }
+        }
+    }
+    fun launchVoiceInput() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your prompt")
+        }
+        try {
+            speechLauncher.launch(intent)
+        } catch (e: Exception) {
+            error = "No speech recognizer on this phone."
+        }
+    }
     // v3.8: session search + long-press manage (Rename / Fork).
     var sessionQuery by remember { mutableStateOf("") }
     var sessionMenuFor by remember { mutableStateOf<String?>(null) }
@@ -265,6 +376,8 @@ fun AgentScreen(
         onHistoryChanged()
         onThinking(true)
         chatJob = scope.launch {
+            // v3.9.1: the finished reply, for the background notification.
+            var completedReply = ""
             try {
                 val system = buildString {
                     append(SYSTEM_PROMPT_BASE)
@@ -303,6 +416,7 @@ fun AgentScreen(
                     topK = topK
                 )
                 history.add(ChatMessage("assistant", reply))
+                completedReply = reply
                 // v3.8: Plan mode — the reply IS the plan; keep it for the card.
                 if (approvalMode == "plan") {
                     pendingPlanText = reply
@@ -339,6 +453,13 @@ fun AgentScreen(
                 pendingReview = false
                 history.add(ChatMessage("assistant", "Error: ${e.message}"))
             } finally {
+                // v3.9.1: reply finished while the app is in the background
+                // and the toggle is ON — post a notification (gap #32).
+                if (completedReply.isNotBlank() && notifyDone && !isForeground) {
+                    try {
+                        Notifier.postDone(context, "DevxyzCode — reply ready", completedReply.take(120))
+                    } catch (_: Exception) { }
+                }
                 onClearImage()
                 onHistoryChanged()
                 onThinking(false)
@@ -784,33 +905,73 @@ fun AgentScreen(
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(10.dp)) {
                     Text("Diff preview — ${openFile?.name ?: "no file open"}", fontWeight = FontWeight.Bold)
-                    val added = pendingDiff.count { it.kind == DiffKind.ADDED }
-                    val removed = pendingDiff.count { it.kind == DiffKind.REMOVED }
-                    Text("+$added lines / -$removed lines", fontSize = 13.sp)
+                    // v3.9.1: per-hunk accept/reject — each changed run is
+                    // its own hunk with a tap toggle; Apply keeps accepted
+                    // hunks only.
+                    val hunks = remember(pendingDiff) { splitHunks(pendingDiff) }
+                    val acceptedSet = hunks.indices.toSet() - rejectedHunks
+                    val added = hunks.withIndex().filter { (i, _) -> i in acceptedSet }
+                        .sumOf { (_, h) -> h.count { it.kind == DiffKind.ADDED } }
+                    val removed = hunks.withIndex().filter { (i, _) -> i in acceptedSet }
+                        .sumOf { (_, h) -> h.count { it.kind == DiffKind.REMOVED } }
+                    Text(
+                        "+$added lines / -$removed lines" +
+                            if (rejectedHunks.isNotEmpty()) " · ${rejectedHunks.size} hunk(s) rejected" else "",
+                        fontSize = 13.sp
+                    )
                     Column(
                         modifier = Modifier.fillMaxWidth().height(220.dp)
                             .verticalScroll(rememberScrollState())
                     ) {
+                        var hunkIndex = -1
+                        var inHunk = false
                         pendingDiff.take(200).forEach { line ->
-                            Text(
-                                text = when (line.kind) {
-                                    DiffKind.ADDED -> "+ ${line.text}"
-                                    DiffKind.REMOVED -> "- ${line.text}"
-                                    DiffKind.UNCHANGED -> "  ${line.text}"
-                                },
-                                fontSize = 12.sp,
-                                fontFamily = FontFamily.Monospace,
-                                color = when (line.kind) {
-                                    DiffKind.ADDED -> Color(0xFF4ADE80)
-                                    DiffKind.REMOVED -> Color(0xFFF87171)
-                                    DiffKind.UNCHANGED -> Color(0xFF94A3B8)
+                            if (line.kind == DiffKind.UNCHANGED) {
+                                inHunk = false
+                                Text(
+                                    text = "  ${line.text}",
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = Color(0xFF94A3B8)
+                                )
+                            } else {
+                                if (!inHunk) {
+                                    hunkIndex++
+                                    inHunk = true
+                                    val idx = hunkIndex
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text("Change ${idx + 1}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        TextButton(onClick = {
+                                            rejectedHunks = if (idx in rejectedHunks) rejectedHunks - idx else rejectedHunks + idx
+                                        }) {
+                                            Text(if (idx in rejectedHunks) "Rejected — tap to accept" else "Accepted — tap to reject", fontSize = 12.sp)
+                                        }
+                                    }
                                 }
-                            )
+                                val rejected = hunkIndex in rejectedHunks
+                                Text(
+                                    text = when (line.kind) {
+                                        DiffKind.ADDED -> "+ ${line.text}"
+                                        DiffKind.REMOVED -> "- ${line.text}"
+                                        DiffKind.UNCHANGED -> "  ${line.text}"
+                                    },
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = when (line.kind) {
+                                        DiffKind.ADDED -> if (rejected) Color(0xFF94A3B8) else Color(0xFF4ADE80)
+                                        DiffKind.REMOVED -> if (rejected) Color(0xFF94A3B8) else Color(0xFFF87171)
+                                        DiffKind.UNCHANGED -> Color(0xFF94A3B8)
+                                    }
+                                )
+                            }
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = {
-                            onApplyCode(code)
+                            onApplyCode(applyHunks(pendingDiff, acceptedSet))
                             if (autoSaveSkills) {
                                 val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
                                 onSaveAsSkill("Auto-skill $time", code.take(2000))
@@ -1008,7 +1169,7 @@ fun AgentScreen(
             }
         } else {
         LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(history) { msg ->
+            itemsIndexed(history) { index, msg ->
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(10.dp)) {
                         Text(
@@ -1037,6 +1198,23 @@ fun AgentScreen(
                                     val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
                                     onSaveAsSkill("Skill $time", msg.content.take(2000))
                                 }) { Text("Save as Skill") }
+                                // v3.9.1: read-aloud — tap to listen, tap again to stop.
+                                TextButton(onClick = {
+                                    if (speakingIndex == index) {
+                                        try { tts?.stop() } catch (_: Exception) { }
+                                        speakingIndex = null
+                                    } else if (ttsReady) {
+                                        speakingIndex = index
+                                        try {
+                                            tts?.speak(stripCodeForSpeech(msg.content), TextToSpeech.QUEUE_FLUSH, null, "devxyzcode-$index")
+                                        } catch (e: Exception) {
+                                            error = "Could not speak: ${e.message}"
+                                            speakingIndex = null
+                                        }
+                                    } else {
+                                        error = "Voice is still loading — try again in a second."
+                                    }
+                                }) { Text(if (speakingIndex == index) "Stop" else "Listen") }
                                 if (canApply && block != null && openFile != null) {
                                     TextButton(onClick = {
                                         pendingCode = block
@@ -1227,6 +1405,10 @@ fun AgentScreen(
                 modifier = Modifier.weight(1f),
                 enabled = !thinking
             ) { Text(if (thinking) "Thinking…" else "Send") }
+            // v3.9.1: voice input — system speech recognizer, tap the mic.
+            IconButton(onClick = { launchVoiceInput() }, enabled = !thinking) {
+                Icon(Icons.Filled.Mic, contentDescription = "Voice input")
+            }
             // v3.7: Stop — cancels the running request (chatJob) so a hung
             // provider can never freeze the Agent.
             if (thinking) {
@@ -1523,7 +1705,11 @@ fun FilesScreen(
     // v3.8: jump to a /review finding's line + Review button (Codex /review).
     jumpLine: Int? = null,
     onJumpConsumed: () -> Unit = {},
-    onReviewFile: () -> Unit = {}
+    onReviewFile: () -> Unit = {},
+    // v3.9.1: inline AI edit (Cursor Cmd+K) needs the provider.
+    baseUrl: String = "",
+    apiKey: String = "",
+    model: String = ""
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1560,6 +1746,66 @@ fun FilesScreen(
     val currentWord = Autocomplete.currentWord(editorValue.text, cursor)
     val suggestions = remember(editorValue.text, cursor) {
         Autocomplete.suggest(editorValue.text, currentWord)
+    }
+
+    // v3.9.1: inline AI edit (Cursor Cmd+K, touch-first) — edit the
+    // selected text, or the whole file when nothing is selected.
+    var aiEditOpen by remember { mutableStateOf(false) }
+    var aiEditInstruction by remember { mutableStateOf("") }
+    var aiEditBusy by remember { mutableStateOf(false) }
+    var aiEditStatus by remember { mutableStateOf("") }
+    var aiEditResult by remember { mutableStateOf<String?>(null) }
+    var aiEditDiff by remember { mutableStateOf<List<DiffLine>>(emptyList()) }
+    var aiEditWhole by remember { mutableStateOf(true) }
+    var aiEditSelStart by remember { mutableStateOf(0) }
+    var aiEditSelEnd by remember { mutableStateOf(0) }
+
+    fun runAiEdit() {
+        if (apiKey.isBlank()) {
+            aiEditStatus = "Add your API key in Settings first (BYOK)."
+            return
+        }
+        if (aiEditInstruction.isBlank()) {
+            aiEditStatus = "Describe the change first."
+            return
+        }
+        val target = if (aiEditWhole) editorValue.text
+        else editorValue.text.substring(aiEditSelStart, aiEditSelEnd)
+        if (target.isBlank()) {
+            aiEditStatus = "Nothing to edit — the file is empty."
+            return
+        }
+        aiEditBusy = true
+        aiEditStatus = ""
+        aiEditResult = null
+        aiEditDiff = emptyList()
+        scope.launch {
+            try {
+                val reply = AiClient.chat(
+                    baseUrl = baseUrl,
+                    apiKey = apiKey,
+                    model = model,
+                    history = listOf(
+                        ChatMessage(
+                            "user",
+                            "Change this code: ${aiEditInstruction.trim()}\n\n```\n${target.take(12000)}\n```"
+                        )
+                    ),
+                    systemPrompt = "You are DevxyzCode. Return ONLY the replacement code in one fenced code block, no explanation, no other text. If the user asked for a whole-file change, return the complete new file."
+                )
+                val code = AiClient.extractCodeBlock(reply)
+                if (code == null) {
+                    aiEditStatus = "The model did not return a code block — try rephrasing."
+                } else {
+                    aiEditResult = code
+                    aiEditDiff = DiffUtil.diff(target, code)
+                }
+            } catch (e: Exception) {
+                aiEditStatus = "Error: ${e.message}"
+            } finally {
+                aiEditBusy = false
+            }
+        }
     }
 
     // v3: diagnostics (LSP-lite) + find symbol (go-to-definition-lite).
@@ -1645,11 +1891,96 @@ fun FilesScreen(
                 Button(onClick = onSave) { Text(if (editorDirty) "Save *" else "Save") }
                 OutlinedButton(onClick = onAttachToAgent) { Text("Attach to Agent") }
                 OutlinedButton(onClick = onReviewFile) { Text("Review") }
+                // v3.9.1: inline AI edit (Cursor Cmd+K) — selected text, or
+                // the whole file when nothing is selected.
+                OutlinedButton(onClick = {
+                    val sel = editorValue.selection
+                    aiEditWhole = sel.start == sel.end
+                    aiEditSelStart = minOf(sel.start, sel.end).coerceIn(0, editorValue.text.length)
+                    aiEditSelEnd = maxOf(sel.start, sel.end).coerceIn(0, editorValue.text.length)
+                    aiEditOpen = true
+                    aiEditResult = null
+                    aiEditDiff = emptyList()
+                    aiEditStatus = ""
+                }) { Text("AI edit") }
                 OutlinedButton(onClick = { showHighlight = !showHighlight }) {
                     Text(if (showHighlight) "Hide highlight" else "Highlight")
                 }
                 OutlinedButton(onClick = { issues = Diagnostics.diagnose(editorText) }) {
                     Text("Check")
+                }
+            }
+            // v3.9.1: inline AI edit card.
+            if (aiEditOpen) {
+                Spacer(Modifier.height(8.dp))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            if (aiEditWhole) "AI edit — whole file"
+                            else "AI edit — selected ${aiEditSelEnd - aiEditSelStart} chars",
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = aiEditInstruction,
+                            onValueChange = { aiEditInstruction = it },
+                            label = { Text("What should change?") },
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 3
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = { runAiEdit() }, enabled = !aiEditBusy, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (aiEditBusy) "Working…" else "Generate edit")
+                        }
+                        if (aiEditStatus.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(aiEditStatus, fontSize = 13.sp)
+                        }
+                        val result = aiEditResult
+                        if (result != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Text("Diff preview", fontWeight = FontWeight.Bold)
+                            Column(
+                                modifier = Modifier.fillMaxWidth().height(220.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                aiEditDiff.take(200).forEach { line ->
+                                    Text(
+                                        text = when (line.kind) {
+                                            DiffKind.ADDED -> "+ ${line.text}"
+                                            DiffKind.REMOVED -> "- ${line.text}"
+                                            DiffKind.UNCHANGED -> "  ${line.text}"
+                                        },
+                                        fontSize = 12.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = when (line.kind) {
+                                            DiffKind.ADDED -> Color(0xFF4ADE80)
+                                            DiffKind.REMOVED -> Color(0xFFF87171)
+                                            DiffKind.UNCHANGED -> Color(0xFF94A3B8)
+                                        }
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = {
+                                    val newText = if (aiEditWhole) result
+                                    else editorValue.text.replaceRange(aiEditSelStart, aiEditSelEnd, result)
+                                    val newCursor = (aiEditSelStart + result.length).coerceIn(0, newText.length)
+                                    editorValue = TextFieldValue(newText, TextRange(newCursor))
+                                    onEditorChange(newText)
+                                    aiEditResult = null
+                                    aiEditDiff = emptyList()
+                                    aiEditOpen = false
+                                    aiEditStatus = "Edit applied to the editor — tap Save to write it."
+                                }) { Text("Apply edit") }
+                                OutlinedButton(onClick = {
+                                    aiEditResult = null
+                                    aiEditDiff = emptyList()
+                                }) { Text("Discard") }
+                            }
+                        }
+                    }
                 }
             }
             if (issues.isNotEmpty()) {
@@ -2343,6 +2674,9 @@ fun SettingsScreen(
     onTopKChange: (String) -> Unit,
     autoCompact: Boolean,
     onAutoCompactChange: (Boolean) -> Unit,
+    // v3.9.1: completion notification toggle.
+    notifyDone: Boolean,
+    onNotifyDoneChange: (Boolean) -> Unit,
     onSave: () -> Unit
 ) {
     var saved by remember { mutableStateOf("") }
@@ -2524,6 +2858,21 @@ fun SettingsScreen(
             Switch(checked = autoCompact, onCheckedChange = onAutoCompactChange)
         }
         Spacer(Modifier.height(8.dp))
+        // v3.9.1: completion notification (gap #32).
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Notify when a reply finishes", fontWeight = FontWeight.Bold)
+                Text(
+                    "When ON, the app posts a notification when an Agent reply finishes while the app is in the background. Needs the notification permission — the app asks once when you turn this on. Default OFF.",
+                    fontSize = 13.sp
+                )
+            }
+            Switch(checked = notifyDone, onCheckedChange = onNotifyDoneChange)
+        }
+        Spacer(Modifier.height(8.dp))
         Button(
             onClick = {
                 onSave()
@@ -2536,7 +2885,7 @@ fun SettingsScreen(
             Text(saved, fontSize = 13.sp)
         }
         Spacer(Modifier.height(16.dp))
-        Text("DevxyzCode v3.9.0", fontWeight = FontWeight.Bold)
+        Text("DevxyzCode v3.9.1", fontWeight = FontWeight.Bold)
         Text("Package com.jepongdevxyz.devxyzcode · minSdk 26 · targetSdk 35", fontSize = 13.sp)
         Text(
             "Privacy: your API key, Telegram token, and GitHub token stay encrypted on this device " +
@@ -2546,13 +2895,18 @@ fun SettingsScreen(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "What v3.9 adds: a Git tab (Status / Commit / Branch / PR via the GitHub API — no git binary " +
-                "on the phone), a Live Preview tab (your HTML app rendered in-app, and the Agent can " +
-                "review a screenshot of it), top-p / top-k model settings (AI Studio Run settings), " +
-                "auto-compaction when the context meter is almost full, and a session token total. " +
-                "What it still does NOT do: run gradle / npm / node / python / git on the phone (those " +
-                "binaries do not exist on a phone), cloud agents, worktrees, full LSP servers, or " +
-                "WhatsApp control. Every change still needs your tap, except scheduled tasks you created yourself.",
+            "What v3.9.1 adds (pure mobile controls only — tap, long-press, chips; " +
+                "no keyboard, no right-click, no PC): inline AI edit in the Files editor " +
+                "(select text — or nothing for the whole file — describe the change, review " +
+                "the diff, Apply), voice input in the Agent composer (mic button, system " +
+                "speech recogniser) + read-aloud on assistant replies (Listen / Stop), " +
+                "per-hunk accept/reject in the diff preview (each change has its own tap " +
+                "toggle; Apply keeps accepted hunks only), and a notification when an Agent " +
+                "reply finishes while the app is in the background (Settings toggle, " +
+                "default OFF). What it still does NOT do: run gradle / npm / node / python / " +
+                "git on the phone (those binaries do not exist on a phone), cloud agents, " +
+                "worktrees, full LSP servers, or WhatsApp control. Every change still needs " +
+                "your tap, except scheduled tasks you created yourself.",
             fontSize = 13.sp
         )
     }

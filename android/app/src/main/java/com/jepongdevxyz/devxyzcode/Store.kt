@@ -465,6 +465,20 @@ object SettingsStore {
             .putBoolean(KEY_AUTO_COMPACT, enabled)
             .apply()
     }
+
+    // v3.9.1: notify when an Agent reply finishes (gap #32).
+    private const val KEY_NOTIFY_DONE = "notify_done"
+
+    /** Default OFF (her rule: toggles off on first run). */
+    fun loadNotifyDone(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_NOTIFY_DONE, false)
+
+    fun saveNotifyDone(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_NOTIFY_DONE, enabled)
+            .apply()
+    }
     fun loadTelegramMessages(context: Context): List<TelegramMessage> = loadList(context, KEY_TELEGRAM)
     fun saveTelegramMessages(context: Context, items: List<TelegramMessage>) = saveList(context, KEY_TELEGRAM, items)
     fun loadTaskResults(context: Context): List<TaskResult> = loadList(context, KEY_TASK_RESULTS)

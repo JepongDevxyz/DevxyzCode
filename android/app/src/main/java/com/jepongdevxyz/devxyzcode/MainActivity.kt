@@ -49,6 +49,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -58,6 +59,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
@@ -107,6 +111,8 @@ class MainActivity : ComponentActivity() {
         // v2.1: show the branded splash screen, then switch to the app theme.
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        // v3.9.1: notification channel for "reply finished" (gap #32).
+        Notifier.createChannel(this)
         setContent {
             // v3.4: theme lives here so the whole app re-themes on change.
             var themeMode by remember { mutableStateOf(SettingsStore.loadThemeMode(this)) }
@@ -249,6 +255,22 @@ fun DevxyzCodeApp(
     var topPText by remember { mutableStateOf(SettingsStore.loadTopP(context)?.toString() ?: "") }
     var topKText by remember { mutableStateOf(SettingsStore.loadTopK(context)?.toString() ?: "") }
     var autoCompact by remember { mutableStateOf(SettingsStore.loadAutoCompact(context)) }
+
+    // v3.9.1: notify when a reply finishes (gap #32) + foreground tracking
+    // so the notification only fires while the app is in the background.
+    var notifyDone by remember { mutableStateOf(SettingsStore.loadNotifyDone(context)) }
+    var isForeground by remember { mutableStateOf(true) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            isForeground = event == Lifecycle.Event.ON_RESUME
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ -> }
 
     // v3.8: AGENTS.md / CLAUDE.md rules from the picked project folder.
     var rulesText by remember { mutableStateOf("") }
@@ -583,6 +605,9 @@ fun DevxyzCodeApp(
                 topP = topPText.toDoubleOrNull(),
                 topK = topKText.toIntOrNull(),
                 autoCompact = autoCompact,
+                // v3.9.1: completion notification.
+                notifyDone = notifyDone,
+                isForeground = isForeground,
                 rulesText = rulesText,
                 rulesFileName = rulesFileName,
                 onCreateAgentsMd = {
@@ -798,7 +823,11 @@ fun DevxyzCodeApp(
                         reviewRequest = file
                         tab = 0
                     }
-                }
+                },
+                // v3.9.1: inline AI edit needs the provider.
+                baseUrl = baseUrl,
+                apiKey = apiKey,
+                model = model
             )
             2 -> RunsScreen(
                 modifier = Modifier.padding(innerPadding),
@@ -985,6 +1014,18 @@ fun DevxyzCodeApp(
                 onAutoCompactChange = {
                     autoCompact = it
                     SettingsStore.saveAutoCompact(context, it)
+                },
+                // v3.9.1: notify when a reply finishes — ask for the
+                // notification permission once when turning it on.
+                notifyDone = notifyDone,
+                onNotifyDoneChange = {
+                    notifyDone = it
+                    SettingsStore.saveNotifyDone(context, it)
+                    if (it && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
                 },
                 onSave = {
                     SettingsStore.save(context, baseUrl, apiKey, model)
