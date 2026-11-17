@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -2565,6 +2566,7 @@ private val GIT_BINARY_EXTS = setOf(
     "mp3", "mp4", "ttf", "woff", "woff2", "pdf", "bin", "so", "dex"
 )
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun GitScreen(
     modifier: Modifier = Modifier,
@@ -2924,6 +2926,7 @@ private fun downscaleBitmapToBase64(bmp: Bitmap): String? {
 // v3.9: Live Preview — AI Studio Build preview + Hermes preview rail +
 // Cursor Design mode, phone-sized. The HTML app renders in a WebView; the
 // Agent can review a screenshot of it (vision).
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PreviewScreen(
     modifier: Modifier = Modifier,
