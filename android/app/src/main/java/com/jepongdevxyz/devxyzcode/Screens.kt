@@ -3043,7 +3043,7 @@ fun SettingsScreen(
             Text(saved, fontSize = 13.sp)
         }
         Spacer(Modifier.height(16.dp))
-        Text("DevxyzCode v3.9.2", fontWeight = FontWeight.Bold)
+        Text("DevxyzCode v3.9.3", fontWeight = FontWeight.Bold)
         Text("Package com.jepongdevxyz.devxyzcode · minSdk 26 · targetSdk 35", fontSize = 13.sp)
         Text(
             "Privacy: your API key, Telegram token, and GitHub token stay encrypted on this device " +
@@ -3053,7 +3053,12 @@ fun SettingsScreen(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "What v3.9.2 adds — the Agent tab is now Claude Code's UI: a dark " +
+            "What v3.9.3 adds — a crash-report screen: if the app crashes, the " +
+                "next launch shows the exact error instead of crashing again, with " +
+                "a Copy button so you can paste it to Spidey. (v3.9.2 installs but " +
+                "crashes on open on her phone; the cause is unknown until the log " +
+                "is seen — this build catches it.) " +
+                "What v3.9.2 added — the Agent tab is now Claude Code's UI: a dark " +
                 "terminal transcript (near-black background, monospace text, Claude " +
                 "orange #D97757). Your messages are `>` lines, the Agent's replies " +
                 "are plain text, and every action is a `⏺` tool line (Preview diff, " +
@@ -3622,5 +3627,49 @@ fun PreviewScreen(
                 Text(reviewText, fontSize = 13.sp)
             }
         }
+    }
+}
+
+/** v3.9.3: crash-report screen — shown INSTEAD of the app when the previous
+ * launch crashed (the trace was saved by CrashLog). Deliberately plain:
+ * a Column, a scrollable Text, two buttons — nothing here can crash the
+ * same way. Copy the trace and send it to Spidey; it names the exact line. */
+@Composable
+fun CrashScreen(trace: String, onClearAndOpen: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    Column(
+        modifier = Modifier.fillMaxSize().background(CcBg).padding(16.dp)
+    ) {
+        Text(
+            "DevxyzCode crashed last time",
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            color = CcOrange
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "This is the exact error. Tap Copy, then paste it to Spidey — it tells him the exact line that crashed. Tap \"Clear & open the app\" to try the app again.",
+            fontSize = 13.sp,
+            fontFamily = FontFamily.Monospace,
+            color = CcText
+        )
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = { clipboard.setText(AnnotatedString(trace)) },
+            colors = ButtonDefaults.buttonColors(containerColor = CcOrange, contentColor = Color(0xFF0F0F0F))
+        ) { Text("Copy crash log") }
+        Spacer(Modifier.height(8.dp))
+        Column(
+            modifier = Modifier.weight(1f).fillMaxWidth()
+                .background(CcPanel, RoundedCornerShape(8.dp))
+                .border(1.dp, CcBorder, RoundedCornerShape(8.dp))
+                .padding(10.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            Text(trace.take(12000), fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = CcText)
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = onClearAndOpen) { Text("Clear & open the app", color = CcText) }
     }
 }

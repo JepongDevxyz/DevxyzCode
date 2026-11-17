@@ -108,22 +108,39 @@ private val AGENTS_TEMPLATE = """
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        // v3.9.3: crash catcher FIRST — before anything else can throw.
+        // A crash writes its stack trace to filesDir/crash-last.txt; the
+        // next launch shows it on the CrashScreen instead of crashing again,
+        // so the exact cause can be copied out (v3.9.2 crashes on her phone).
+        CrashLog.install(this)
         // v2.1: show the branded splash screen, then switch to the app theme.
         installSplashScreen()
         super.onCreate(savedInstanceState)
         // v3.9.1: notification channel for "reply finished" (gap #32).
         Notifier.createChannel(this)
+        val lastCrash = CrashLog.readLast(this)
         setContent {
             // v3.4: theme lives here so the whole app re-themes on change.
             var themeMode by remember { mutableStateOf(SettingsStore.loadThemeMode(this)) }
+            var showCrash by remember { mutableStateOf(lastCrash != null) }
             DevxyzCodeTheme(themeMode) {
-                DevxyzCodeApp(
-                    themeMode = themeMode,
-                    onThemeModeChange = {
-                        themeMode = it
-                        SettingsStore.saveThemeMode(this, it)
-                    }
-                )
+                if (showCrash && lastCrash != null) {
+                    CrashScreen(
+                        trace = lastCrash,
+                        onClearAndOpen = {
+                            CrashLog.clear(this)
+                            showCrash = false
+                        }
+                    )
+                } else {
+                    DevxyzCodeApp(
+                        themeMode = themeMode,
+                        onThemeModeChange = {
+                            themeMode = it
+                            SettingsStore.saveThemeMode(this, it)
+                        }
+                    )
+                }
             }
         }
     }
