@@ -20,7 +20,9 @@ import java.io.File
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
@@ -43,6 +45,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -51,6 +54,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -169,6 +173,33 @@ fun applyHunks(diff: List<DiffLine>, accepted: Set<Int>): String {
 /** v3.9.1: read-aloud speaks prose, not code — strip fenced blocks first. */
 private fun stripCodeForSpeech(text: String): String {
     return text.replace(Regex("```[\\s\\S]*?```"), " [code] ").trim()
+}
+
+// v3.9.2: Claude Code terminal palette — Agent screen only. The screen is
+// deliberately dark like Claude Code's TUI, whatever the app theme is.
+private val CcBg = Color(0xFF0F0F0F)
+private val CcPanel = Color(0xFF1A1A1A)
+private val CcBorder = Color(0xFF333333)
+private val CcText = Color(0xFFE8E8E8)
+private val CcDim = Color(0xFF8A8A8A)
+private val CcOrange = Color(0xFFD97757)
+
+/** v3.9.2: a Claude Code-style mono chip — active = orange border + text. */
+@Composable
+private fun CcChip(text: String, active: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .border(1.dp, if (active) CcOrange else CcBorder, RoundedCornerShape(16.dp))
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Text(
+            text,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            color = if (active) CcOrange else CcDim
+        )
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
@@ -601,11 +632,37 @@ fun AgentScreen(
         runReview(file)
     }
 
-    Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
-        Text("DevxyzCode Agent", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+    Column(modifier = modifier.fillMaxSize().background(CcBg).padding(16.dp)) {
+        // v3.9.2: Claude Code status line — the big title + description are
+        // gone; the screen is a terminal transcript now.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "✻ DevxyzCode",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                color = CcOrange
+            )
+            Text(
+                model,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = CcDim
+            )
+        }
         Text(
-            "Chat + propose code. Nothing is written or run until you approve it.",
-            fontSize = 13.sp
+            when (approvalMode) {
+                "auto" -> "⏵⏵ auto mode on"
+                "plan" -> "⏸ plan mode on"
+                "ask" -> "⏸ ask mode on"
+                else -> "⏸ suggest mode on"
+            } + " · nothing is written or run until you approve it",
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            color = CcDim
         )
         Spacer(Modifier.height(8.dp))
         // v3.7: no-key banner — the app is usable with no key (the workspace
@@ -615,16 +672,22 @@ fun AgentScreen(
         if (apiKey.isBlank()) {
             Column(
                 modifier = Modifier.fillMaxWidth()
-                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                    .background(CcPanel, RoundedCornerShape(8.dp))
+                    .border(1.dp, CcBorder, RoundedCornerShape(8.dp))
                     .padding(12.dp)
             ) {
                 Text(
                     "No API key yet — the Agent can't chat until you add one. " +
                         "Bring your own key (BYOK); it stays encrypted on this device.",
-                    fontSize = 13.sp
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = CcText
                 )
                 Spacer(Modifier.height(8.dp))
-                Button(onClick = onOpenSettings) { Text("Add API key") }
+                Button(
+                    onClick = onOpenSettings,
+                    colors = ButtonDefaults.buttonColors(containerColor = CcOrange, contentColor = Color(0xFF0F0F0F))
+                ) { Text("Add API key") }
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -635,19 +698,11 @@ fun AgentScreen(
         // v3.8: Plan mode (Claude Code / Cursor / Codex) and Ask mode
         // (Cursor Ask / Codex Read Only) join the row.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Mode:", fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            OutlinedButton(onClick = { onApprovalModeChange("suggest") }) {
-                Text(if (approvalMode == "suggest") "● Suggest" else "Suggest", fontSize = 12.sp)
-            }
-            OutlinedButton(onClick = { onApprovalModeChange("auto") }) {
-                Text(if (approvalMode == "auto") "● Auto" else "Auto", fontSize = 12.sp)
-            }
-            OutlinedButton(onClick = { onApprovalModeChange("plan") }) {
-                Text(if (approvalMode == "plan") "● Plan" else "Plan", fontSize = 12.sp)
-            }
-            OutlinedButton(onClick = { onApprovalModeChange("ask") }) {
-                Text(if (approvalMode == "ask") "● Ask" else "Ask", fontSize = 12.sp)
-            }
+            Text("Mode:", fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = CcDim)
+            CcChip("Suggest", approvalMode == "suggest") { onApprovalModeChange("suggest") }
+            CcChip("Auto", approvalMode == "auto") { onApprovalModeChange("auto") }
+            CcChip("Plan", approvalMode == "plan") { onApprovalModeChange("plan") }
+            CcChip("Ask", approvalMode == "ask") { onApprovalModeChange("ask") }
         }
         Text(
             when (approvalMode) {
@@ -656,20 +711,22 @@ fun AgentScreen(
                 "ask" -> "Ask (read-only): the Agent answers and explains — it never proposes edits."
                 else -> "Suggest: code is proposed — you tap Preview diff or Show plan, then Apply."
             },
-            fontSize = 12.sp
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            color = CcDim
         )
         Spacer(Modifier.height(8.dp))
         // v3.8: project rules — AGENTS.md / CLAUDE.md from the picked folder
         // (Claude Code / OpenCode / Antigravity). Read at session start and
         // injected into every prompt; one tap creates a starter file.
         if (rulesFileName.isNotEmpty()) {
-            Text("Rules loaded: $rulesFileName", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text("Rules loaded: $rulesFileName", fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = CcDim)
         } else if (projectFiles.isNotEmpty()) {
             TextButton(onClick = {
                 val result = onCreateAgentsMd()
                 history.add(ChatMessage("assistant", result))
                 onHistoryChanged()
-            }) { Text("Create AGENTS.md — teach the Agent your project rules", fontSize = 12.sp) }
+            }) { Text("Create AGENTS.md — teach the Agent your project rules", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcOrange) }
         }
         // v3.8: context meter (Cursor ring / OpenCode sidebar, phone-sized) —
         // estimated tokens from chars/4, % of a ~128k window (estimate).
@@ -687,21 +744,25 @@ fun AgentScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Context: ≈$tokens tokens · $pct% of ~128k window (estimate)", fontSize = 12.sp)
+                    Text("Context: ≈$tokens tokens · $pct% of ~128k window (estimate)", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim)
                     TextButton(onClick = { showContextBreakdown = !showContextBreakdown }) {
-                        Text(if (showContextBreakdown) "Hide" else "Details", fontSize = 12.sp)
+                        Text(if (showContextBreakdown) "Hide" else "Details", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcOrange)
                     }
                 }
                 LinearProgressIndicator(
                     progress = { (tokens.toFloat() / window).coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    color = CcOrange,
+                    trackColor = CcBorder
                 )
                 if (showContextBreakdown) {
                     Text(
                         "System prompt ≈${systemChars / 4} tokens · Attached files ≈${attachedChars / 4} tokens · Conversation ≈${historyChars / 4} tokens. " +
                             "Session total ≈$tokens tokens · ${history.size} messages. " +
                             "Cost is shown only when the provider returns usage in its reply.",
-                        fontSize = 12.sp
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = CcDim
                     )
                 }
             }
@@ -723,16 +784,24 @@ fun AgentScreen(
                 if (pctNow < 80) autoCompacted = false
             }
             if (pctNow >= 90) {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(
-                            "Context is almost full ($pctNow%) — older turns will be summarised into a short summary.",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Button(onClick = { runCompact() }) { Text("Compact now") }
-                    }
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(CcPanel, RoundedCornerShape(8.dp))
+                        .border(1.dp, CcBorder, RoundedCornerShape(8.dp))
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        "Context is almost full ($pctNow%) — older turns will be summarised into a short summary.",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        color = CcOrange
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Button(
+                        onClick = { runCompact() },
+                        colors = ButtonDefaults.buttonColors(containerColor = CcOrange, contentColor = Color(0xFF0F0F0F))
+                    ) { Text("Compact now") }
                 }
                 Spacer(Modifier.height(8.dp))
             }
@@ -747,7 +816,16 @@ fun AgentScreen(
                 onValueChange = { sessionQuery = it },
                 label = { Text("Search sessions…") },
                 modifier = Modifier.fillMaxWidth(),
-                maxLines = 1
+                maxLines = 1,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = CcOrange,
+                    unfocusedBorderColor = CcBorder,
+                    focusedTextColor = CcText,
+                    unfocusedTextColor = CcText,
+                    cursorColor = CcOrange,
+                    focusedLabelColor = CcDim,
+                    unfocusedLabelColor = CcDim
+                )
             )
             Spacer(Modifier.height(4.dp))
         }
@@ -764,15 +842,20 @@ fun AgentScreen(
                             onClick = { onSelectSession(title) },
                             onLongClick = { sessionMenuFor = title; renameText = title }
                         )
-                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                        .border(1.dp, if (title == currentSessionTitle) CcOrange else CcBorder, RoundedCornerShape(16.dp))
                         .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
-                    Text(if (title == currentSessionTitle) "● $title" else title, fontSize = 11.sp)
+                    Text(
+                        if (title == currentSessionTitle) "● $title" else title,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (title == currentSessionTitle) CcOrange else CcDim
+                    )
                 }
             }
-            TextButton(onClick = onNewSession) { Text("+ New", fontSize = 12.sp) }
+            TextButton(onClick = onNewSession) { Text("+ New", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcOrange) }
             if (sessionTitles.size > 1) {
-                TextButton(onClick = onDeleteSession) { Text("Delete", fontSize = 12.sp) }
+                TextButton(onClick = onDeleteSession) { Text("Delete", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim) }
             }
         }
         val menuFor = sessionMenuFor
@@ -780,29 +863,42 @@ fun AgentScreen(
             Spacer(Modifier.height(8.dp))
             Column(
                 modifier = Modifier.fillMaxWidth()
-                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                    .background(CcPanel, RoundedCornerShape(8.dp))
+                    .border(1.dp, CcBorder, RoundedCornerShape(8.dp))
                     .padding(8.dp)
             ) {
-                Text("Session: $menuFor", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text("Session: $menuFor", fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = CcText)
                 OutlinedTextField(
                     value = renameText,
                     onValueChange = { renameText = it },
                     label = { Text("New name") },
                     modifier = Modifier.fillMaxWidth(),
-                    maxLines = 1
+                    maxLines = 1,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = CcOrange,
+                        unfocusedBorderColor = CcBorder,
+                        focusedTextColor = CcText,
+                        unfocusedTextColor = CcText,
+                        cursorColor = CcOrange,
+                        focusedLabelColor = CcDim,
+                        unfocusedLabelColor = CcDim
+                    )
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = {
-                        onRenameSession(menuFor, renameText)
-                        sessionMenuFor = null
-                    }) { Text("Rename") }
+                    Button(
+                        onClick = {
+                            onRenameSession(menuFor, renameText)
+                            sessionMenuFor = null
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CcOrange, contentColor = Color(0xFF0F0F0F))
+                    ) { Text("Rename") }
                     OutlinedButton(onClick = {
                         onForkSession(menuFor)
                         sessionMenuFor = null
-                    }) { Text("Fork") }
-                    TextButton(onClick = { sessionMenuFor = null }) { Text("Cancel") }
+                    }) { Text("Fork", color = CcText) }
+                    TextButton(onClick = { sessionMenuFor = null }) { Text("Cancel", color = CcDim) }
                 }
-                Text("Long-press a session chip to rename or fork it.", fontSize = 12.sp)
+                Text("Long-press a session chip to rename or fork it.", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim)
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -813,51 +909,52 @@ fun AgentScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             models.forEach { m ->
-                OutlinedButton(onClick = { onModelChange(m) }) {
-                    Text(if (m == model) "● $m" else m, fontSize = 11.sp)
-                }
+                CcChip(if (m == model) "● $m" else m, m == model) { onModelChange(m) }
             }
         }
         // v3.8: effort selector (Antigravity picker / Codex reasoning effort,
         // phone-sized): Low = fast + cheap, Medium = default, High = harder.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Effort:", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text("Effort:", fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = CcDim)
             listOf("low", "medium", "high").forEach { level ->
-                OutlinedButton(onClick = { onEffortChange(level) }) {
-                    Text(
-                        if (effort == level) "● ${level.replaceFirstChar { it.uppercase() }}" else level.replaceFirstChar { it.uppercase() },
-                        fontSize = 12.sp
-                    )
-                }
+                CcChip(
+                    if (effort == level) "● ${level.replaceFirstChar { it.uppercase() }}" else level.replaceFirstChar { it.uppercase() },
+                    effort == level
+                ) { onEffortChange(level) }
             }
         }
         if (selectedSkills.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
-            Text("Skills in use: ${selectedSkills.joinToString(", ")}", fontSize = 13.sp)
+            Text("Skills in use: ${selectedSkills.joinToString(", ")}", fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = CcDim)
         }
         if (attachedFiles.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(8.dp)) {
-                    attachedFiles.forEach { file ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            // v3.4: a long path takes the free width and
-                            // ellipsizes instead of pushing "Remove" off-screen.
-                            Text(
-                                "Attached: ${file.relativePath}",
-                                fontSize = 13.sp,
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            TextButton(onClick = { onClearAttachment(file) }) { Text("Remove") }
-                        }
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .background(CcPanel, RoundedCornerShape(8.dp))
+                    .border(1.dp, CcBorder, RoundedCornerShape(8.dp))
+                    .padding(8.dp)
+            ) {
+                attachedFiles.forEach { file ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        // v3.4: a long path takes the free width and
+                        // ellipsizes instead of pushing "Remove" off-screen.
+                        Text(
+                            "Attached: ${file.relativePath}",
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = CcText,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        TextButton(onClick = { onClearAttachment(file) }) { Text("Remove", color = CcOrange) }
                     }
-                    TextButton(onClick = onClearAllAttachments) { Text("Remove all") }
                 }
+                TextButton(onClick = onClearAllAttachments) { Text("Remove all", color = CcOrange) }
             }
         }
         // v3.1: provider self-setup card — shown only when a setup snippet
@@ -865,46 +962,58 @@ fun AgentScreen(
         val setup = detectedSetup
         if (setup != null) {
             Spacer(Modifier.height(8.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(10.dp)) {
-                    Text("Provider setup detected — ${setup.provider}", fontWeight = FontWeight.Bold)
-                    Text("Base URL: ${setup.baseUrl}", fontSize = 13.sp)
-                    Text(
-                        "Key: ${if (setup.keyMasked) "masked in your paste — paste the full key to apply" else setup.apiKey.take(6) + "••••"}",
-                        fontSize = 13.sp
-                    )
-                    Text(
-                        "Model: ${setup.model ?: "(not in the snippet — keeps the current model)"}",
-                        fontSize = 13.sp
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
-                                onApplyProviderSetup(setup.baseUrl, setup.apiKey, setup.model)
-                                setupStatus = "Provider set: ${setup.provider} — base URL + key saved (encrypted)."
-                                detectedSetup = null
-                            },
-                            enabled = !setup.keyMasked
-                        ) { Text("Apply setup") }
-                        OutlinedButton(onClick = { detectedSetup = null }) { Text("Dismiss") }
-                    }
-                    if (setup.keyMasked) {
-                        Text("The key in your paste is masked (••••) — I cannot use a partial key. Paste the full key from the provider's page.", fontSize = 12.sp)
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .background(CcPanel, RoundedCornerShape(8.dp))
+                    .border(1.dp, CcBorder, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("Provider setup detected — ${setup.provider}", fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = CcText)
+                Text("Base URL: ${setup.baseUrl}", fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = CcDim)
+                Text(
+                    "Key: ${if (setup.keyMasked) "masked in your paste — paste the full key to apply" else setup.apiKey.take(6) + "••••"}",
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = CcDim
+                )
+                Text(
+                    "Model: ${setup.model ?: "(not in the snippet — keeps the current model)"}",
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = CcDim
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            onApplyProviderSetup(setup.baseUrl, setup.apiKey, setup.model)
+                            setupStatus = "Provider set: ${setup.provider} — base URL + key saved (encrypted)."
+                            detectedSetup = null
+                        },
+                        enabled = !setup.keyMasked,
+                        colors = ButtonDefaults.buttonColors(containerColor = CcOrange, contentColor = Color(0xFF0F0F0F))
+                    ) { Text("Apply setup") }
+                    OutlinedButton(onClick = { detectedSetup = null }) { Text("Dismiss", color = CcText) }
+                }
+                if (setup.keyMasked) {
+                        Text("The key in your paste is masked (••••) — I cannot use a partial key. Paste the full key from the provider's page.", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim)
                     }
                 }
-            }
         }
         if (setupStatus.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
-            Text(setupStatus, fontSize = 13.sp)
+            Text(setupStatus, fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = CcDim)
         }
         // v2: diff preview — shown BEFORE anything is applied.
         val code = pendingCode
         if (code != null) {
             Spacer(Modifier.height(8.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(10.dp)) {
-                    Text("Diff preview — ${openFile?.name ?: "no file open"}", fontWeight = FontWeight.Bold)
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .background(CcPanel, RoundedCornerShape(8.dp))
+                    .border(1.dp, CcBorder, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("Diff preview — ${openFile?.name ?: "no file open"}", fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = CcText)
                     // v3.9.1: per-hunk accept/reject — each changed run is
                     // its own hunk with a tap toggle; Apply keeps accepted
                     // hunks only.
@@ -917,7 +1026,9 @@ fun AgentScreen(
                     Text(
                         "+$added lines / -$removed lines" +
                             if (rejectedHunks.isNotEmpty()) " · ${rejectedHunks.size} hunk(s) rejected" else "",
-                        fontSize = 13.sp
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = CcDim
                     )
                     Column(
                         modifier = Modifier.fillMaxWidth().height(220.dp)
@@ -943,11 +1054,11 @@ fun AgentScreen(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
-                                        Text("Change ${idx + 1}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        Text("Change ${idx + 1}", fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = CcText)
                                         TextButton(onClick = {
                                             rejectedHunks = if (idx in rejectedHunks) rejectedHunks - idx else rejectedHunks + idx
                                         }) {
-                                            Text(if (idx in rejectedHunks) "Rejected — tap to accept" else "Accepted — tap to reject", fontSize = 12.sp)
+                                            Text(if (idx in rejectedHunks) "Rejected — tap to accept" else "Accepted — tap to reject", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcOrange)
                                         }
                                     }
                                 }
@@ -978,25 +1089,28 @@ fun AgentScreen(
                             }
                             pendingCode = null
                             pendingDiff = emptyList()
-                        }) { Text("Apply") }
+                        }, colors = ButtonDefaults.buttonColors(containerColor = CcOrange, contentColor = Color(0xFF0F0F0F))) { Text("Apply") }
                         OutlinedButton(onClick = {
                             pendingCode = null
                             pendingDiff = emptyList()
-                        }) { Text("Discard") }
+                        }) { Text("Discard", color = CcText) }
                     }
-                    Text("Apply only puts the code in the editor — tap Save in Files to write it.", fontSize = 12.sp)
+                    Text("Apply only puts the code in the editor — tap Save in Files to write it.", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim)
                 }
-            }
         }
         // v3.3: multi-file plan — one card per file, diff vs the current
         // file (or NEW), then one tap writes them all.
         val plan = pendingPlan
         if (plan != null) {
             Spacer(Modifier.height(8.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(10.dp)) {
-                    Text("Plan — ${plan.size} file(s)", fontWeight = FontWeight.Bold)
-                    Text("Review each diff, then Apply all writes the files. New files are created in the picked project folder.", fontSize = 12.sp)
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .background(CcPanel, RoundedCornerShape(8.dp))
+                    .border(1.dp, CcBorder, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("Plan — ${plan.size} file(s)", fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = CcText)
+                Text("Review each diff, then Apply all writes the files. New files are created in the picked project folder.", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim)
                     plan.forEach { block ->
                         Spacer(Modifier.height(8.dp))
                         val exists = projectFiles.any {
@@ -1008,13 +1122,14 @@ fun AgentScreen(
                             "${block.filename} — ${if (exists) "EDIT" else "NEW"}",
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,
-                            fontFamily = FontFamily.Monospace
+                            fontFamily = FontFamily.Monospace,
+                            color = CcText
                         )
                         val diffs = pendingPlanDiffs[block.filename] ?: emptyList()
                         val added = diffs.count { it.kind == DiffKind.ADDED }
                         val removed = diffs.count { it.kind == DiffKind.REMOVED }
                         if (diffs.isNotEmpty()) {
-                            Text("+$added lines / -$removed lines", fontSize = 12.sp)
+                            Text("+$added lines / -$removed lines", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim)
                             Column(
                                 modifier = Modifier.fillMaxWidth().height(140.dp)
                                     .verticalScroll(rememberScrollState())
@@ -1037,7 +1152,7 @@ fun AgentScreen(
                                 }
                             }
                         } else {
-                            Text("${block.code.lines().size} lines (new content)", fontSize = 12.sp)
+                            Text("${block.code.lines().size} lines (new content)", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim)
                         }
                     }
                     Spacer(Modifier.height(8.dp))
@@ -1046,74 +1161,84 @@ fun AgentScreen(
                             planStatus = onApplyMultiFile(plan)
                             pendingPlan = null
                             pendingPlanDiffs = emptyMap()
-                        }) { Text("Apply all (${plan.size})") }
+                        }, colors = ButtonDefaults.buttonColors(containerColor = CcOrange, contentColor = Color(0xFF0F0F0F))) { Text("Apply all (${plan.size})") }
                         OutlinedButton(onClick = {
                             pendingPlan = null
                             pendingPlanDiffs = emptyMap()
-                        }) { Text("Discard") }
+                        }) { Text("Discard", color = CcText) }
                     }
                     if (planStatus.isNotEmpty()) {
-                        Text(planStatus, fontSize = 13.sp)
+                        Text(planStatus, fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = CcDim)
                         Spacer(Modifier.height(4.dp))
                         OutlinedButton(onClick = { onOpenInFiles(plan.first().filename) }) {
-                            Text("Open in Files")
+                            Text("Open in Files", color = CcText)
                         }
                     }
                 }
-            }
         }
         // v3.8: Plan-mode plan card — the reply in Plan mode is the plan;
         // Approve & Build flips to Suggest and sends "Proceed with this plan".
         val planText = pendingPlanText
         if (planText != null) {
             Spacer(Modifier.height(8.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(10.dp)) {
-                    Text("Plan — review before building", fontWeight = FontWeight.Bold)
-                    Text("Nothing is written until you tap Approve & Build.", fontSize = 12.sp)
-                    Column(
-                        modifier = Modifier.fillMaxWidth().height(220.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        Text(planText.take(6000), fontSize = 13.sp)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = {
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .background(CcPanel, RoundedCornerShape(8.dp))
+                    .border(1.dp, CcBorder, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("Plan — review before building", fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = CcText)
+                Text("Nothing is written until you tap Approve & Build.", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim)
+                Column(
+                    modifier = Modifier.fillMaxWidth().height(220.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(planText.take(6000), fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = CcText)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
                             val plan = planText
                             pendingPlanText = null
                             onPlanChange("")
                             onApprovalModeChange("suggest")
                             sendPrompt("Proceed with this plan:\n$plan")
-                        }) { Text("Approve & Build") }
-                        OutlinedButton(onClick = {
-                            pendingPlanText = null
-                            onPlanChange("")
-                        }) { Text("Discard") }
-                    }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CcOrange, contentColor = Color(0xFF0F0F0F))
+                    ) { Text("Approve & Build") }
+                    OutlinedButton(onClick = {
+                        pendingPlanText = null
+                        onPlanChange("")
+                    }) { Text("Discard", color = CcText) }
                 }
             }
         }
         // v3.8: /review findings — each row jumps to its file:line in Files.
         if (reviewFindings.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(10.dp)) {
-                    Text("Review findings — ${reviewFindings.size}", fontWeight = FontWeight.Bold)
-                    Text("Tap a finding to jump to its line in the editor.", fontSize = 12.sp)
-                    reviewFindings.forEach { finding ->
-                        TextButton(
-                            onClick = { onReviewFindingTap(finding.file, finding.line) },
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .background(CcPanel, RoundedCornerShape(8.dp))
+                    .border(1.dp, CcBorder, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("Review findings — ${reviewFindings.size}", fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = CcText)
+                Text("Tap a finding to jump to its line in the editor.", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim)
+                reviewFindings.forEach { finding ->
+                    TextButton(
+                        onClick = { onReviewFindingTap(finding.file, finding.line) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            "[${finding.severity}] ${finding.file}:${finding.line} — ${finding.text}",
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = CcText,
                             modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                "[${finding.severity}] ${finding.file}:${finding.line} — ${finding.text}",
-                                fontSize = 13.sp,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
+                        )
                     }
-                    TextButton(onClick = { reviewFindings = emptyList() }) { Text("Clear findings") }
                 }
+                TextButton(onClick = { reviewFindings = emptyList() }) { Text("Clear findings", color = CcOrange) }
             }
         }
         // v3.8: checkpoints — the snapshot saved before the last Apply.
@@ -1127,18 +1252,20 @@ fun AgentScreen(
                 Text(
                     "Checkpoint saved ${latestCheckpoint.time} (${latestCheckpoint.files.size} file(s))",
                     fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = CcDim,
                     modifier = Modifier.weight(1f)
                 )
                 OutlinedButton(onClick = {
                     val result = onRestoreCheckpoint(latestCheckpoint)
                     history.add(ChatMessage("assistant", result))
                     onHistoryChanged()
-                }) { Text("Restore", fontSize = 12.sp) }
+                }) { Text("Restore", fontSize = 12.sp, color = CcText) }
             }
-            Text("Tip: type /undo in the chat to restore the last checkpoint.", fontSize = 12.sp)
+            Text("Tip: type /undo in the chat to restore the last checkpoint.", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim)
         }
         if (goalStatus.isNotEmpty()) {
-            Text(goalStatus, fontSize = 13.sp)
+            Text(goalStatus, fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = CcDim)
         }
         Spacer(Modifier.height(8.dp))
         // v3.4: Cursor / AI Studio style empty state — a hero + suggestion
@@ -1149,11 +1276,14 @@ fun AgentScreen(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text("What do you want to build?", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text("✻", fontSize = 40.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = CcOrange)
+                Text("What do you want to build?", fontSize = 20.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = CcText)
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "Ask the Agent to fix, explain, or build code — or attach a screenshot.",
-                    fontSize = 13.sp
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = CcDim
                 )
                 Spacer(Modifier.height(12.dp))
                 FlowRow(
@@ -1161,23 +1291,24 @@ fun AgentScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     listOf("Fix a bug in my code", "Build a new screen", "Explain this code").forEach { suggestion ->
-                        OutlinedButton(onClick = { input = suggestion }) {
-                            Text(suggestion, fontSize = 12.sp)
-                        }
+                        CcChip("> $suggestion", false) { input = suggestion }
                     }
                 }
             }
         } else {
-        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             itemsIndexed(history) { index, msg ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(10.dp)) {
-                        Text(
-                            if (msg.role == "user") "You" else "DevxyzCode",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
-                        )
-                        Text(msg.content.take(6000), fontSize = 14.sp)
+                // v3.9.2: Claude Code transcript — no cards. User input is a
+                // `>` line (orange prompt), assistant text follows plain.
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    if (msg.role == "user") {
+                        Row {
+                            Text("> ", fontWeight = FontWeight.Bold, fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = CcOrange)
+                            Text(msg.content.take(6000), fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = CcText)
+                        }
+                    } else {
+                        Text(msg.content.take(6000), fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = CcText)
+                    }
                         if (msg.role == "assistant") {
                             val block = AiClient.extractCodeBlock(msg.content)
                             val shell = AiClient.extractShellBlock(msg.content)
@@ -1187,17 +1318,19 @@ fun AgentScreen(
                             val canApply = approvalMode == "suggest" || approvalMode == "auto"
                             // v3.4: FlowRow — five action buttons in one Row
                             // overflowed on narrow phones; they wrap now.
+                            // v3.9.2: Claude Code tool lines — `⏺` + label,
+                            // same taps and conditions as before.
                             FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 TextButton(onClick = {
                                     clipboard.setText(AnnotatedString(msg.content))
-                                }) { Text("Copy reply") }
+                                }) { Text("⏺ Copy reply", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim) }
                                 TextButton(onClick = {
                                     val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
                                     onSaveAsSkill("Skill $time", msg.content.take(2000))
-                                }) { Text("Save as Skill") }
+                                }) { Text("⏺ Save as Skill", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim) }
                                 // v3.9.1: read-aloud — tap to listen, tap again to stop.
                                 TextButton(onClick = {
                                     if (speakingIndex == index) {
@@ -1214,12 +1347,12 @@ fun AgentScreen(
                                     } else {
                                         error = "Voice is still loading — try again in a second."
                                     }
-                                }) { Text(if (speakingIndex == index) "Stop" else "Listen") }
+                                }) { Text(if (speakingIndex == index) "⏺ Stop" else "⏺ Listen", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim) }
                                 if (canApply && block != null && openFile != null) {
                                     TextButton(onClick = {
                                         pendingCode = block
                                         pendingDiff = DiffUtil.diff(editorText, block)
-                                    }) { Text("Preview diff") }
+                                    }) { Text("⏺ Preview diff", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim) }
                                 }
                                 // v3.3: a multi-file reply becomes a plan —
                                 // one card per file, diffs loaded, one-tap Apply all.
@@ -1246,41 +1379,38 @@ fun AgentScreen(
                                             }
                                             pendingPlanDiffs = diffs
                                         }
-                                    }) { Text("Show plan (${named.size} files)") }
+                                    }) { Text("⏺ Show plan (${named.size} files)", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim) }
                                 }
                                 // v3.1: a ```sh block runs in the Terminal tab,
                                 // never inside this chat, only on her tap.
                                 if (shell != null) {
                                     TextButton(onClick = { onRunInTerminal(shell) }) {
-                                        Text("Run in Terminal")
+                                        Text("⏺ Run in Terminal", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim)
                                     }
                                 }
                             }
                             if (canApply && block != null && openFile == null) {
-                                Text("Open a file in Files first to preview / apply this code.", fontSize = 12.sp)
+                                Text("Open a file in Files first to preview / apply this code.", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim)
                             }
                         }
                     }
-                }
             }
             if (thinking) {
-                // v3.5 (Codex): working status names the model, like Codex's
-                // "Working" line — no fake step list, the reply is one shot.
+                // v3.9.2: Claude Code working line — orange ✻, no spinner.
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                        Text("Working with $model…", fontSize = 13.sp)
+                        Text("✻ Working with $model…", fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = CcOrange)
                     }
                 }
             }
         }
         }
         if (error.isNotEmpty()) {
-            Text(error, fontSize = 13.sp)
+            Text(error, fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = Color(0xFFF87171))
             Spacer(Modifier.height(4.dp))
         }
         if (autoStatus.isNotEmpty()) {
-            Text(autoStatus, fontSize = 13.sp)
+            Text(autoStatus, fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = CcDim)
             Spacer(Modifier.height(4.dp))
         }
         // v3.3: vision — attach one image; Gemini models read it with the prompt.
@@ -1289,12 +1419,12 @@ fun AgentScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             IconButton(onClick = onPickImage) {
-                Icon(Icons.Filled.Image, contentDescription = "Attach image")
+                Icon(Icons.Filled.Image, contentDescription = "Attach image", tint = CcDim)
             }
             if (pendingImageBase64 != null) {
-                TextButton(onClick = onClearImage) { Text("Image attached ✕") }
+                TextButton(onClick = onClearImage) { Text("Image attached ✕", color = CcOrange) }
             } else {
-                Text("Attach an image for the AI to see (screenshot, design)", fontSize = 12.sp)
+                Text("Attach an image for the AI to see (screenshot, design)", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim)
             }
         }
         // v3.8: @-mention popup — type @, pick a project file, its contents
@@ -1312,24 +1442,28 @@ fun AgentScreen(
                 !it.isDir && it.relativePath.contains(mentionQuery, ignoreCase = true)
             }.take(8)
             if (matches.isNotEmpty()) {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(6.dp)) {
-                        matches.forEach { file ->
-                            TextButton(
-                                onClick = {
-                                    onMentionFile(file)
-                                    val at = input.lastIndexOf('@')
-                                    input = input.substring(0, at) + "@${file.relativePath} "
-                                },
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(CcPanel, RoundedCornerShape(8.dp))
+                        .border(1.dp, CcBorder, RoundedCornerShape(8.dp))
+                        .padding(6.dp)
+                ) {
+                    matches.forEach { file ->
+                        TextButton(
+                            onClick = {
+                                onMentionFile(file)
+                                val at = input.lastIndexOf('@')
+                                input = input.substring(0, at) + "@${file.relativePath} "
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                file.relativePath,
+                                fontSize = 13.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = CcText,
                                 modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    file.relativePath,
-                                    fontSize = 13.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                            }
+                            )
                         }
                     }
                 }
@@ -1351,25 +1485,28 @@ fun AgentScreen(
                 skills.filter { it.name.contains(slashQuery, ignoreCase = true) }
                     .map { "/${it.name}" to "Skill: ${it.name}" }
             if (commandRows.isNotEmpty()) {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(6.dp)) {
-                        commandRows.take(8).forEach { (cmd, desc) ->
-                            TextButton(
-                                onClick = {
-                                    if (cmd == "/goal") {
-                                        input = "/goal "
-                                    } else if (runSlashCommand(cmd)) {
-                                        input = ""
-                                    } else {
-                                        error = "Unknown command: $cmd"
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(modifier = Modifier.fillMaxWidth()) {
-                                    Text(cmd, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                    Text(desc, fontSize = 12.sp)
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(CcPanel, RoundedCornerShape(8.dp))
+                        .border(1.dp, CcBorder, RoundedCornerShape(8.dp))
+                        .padding(6.dp)
+                ) {
+                    commandRows.take(8).forEach { (cmd, desc) ->
+                        TextButton(
+                            onClick = {
+                                if (cmd == "/goal") {
+                                    input = "/goal "
+                                } else if (runSlashCommand(cmd)) {
+                                    input = ""
+                                } else {
+                                    error = "Unknown command: $cmd"
                                 }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Text(cmd, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = CcOrange)
+                                Text(desc, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CcDim)
                             }
                         }
                     }
@@ -1381,8 +1518,18 @@ fun AgentScreen(
             value = input,
             onValueChange = { input = it },
             label = { Text("Ask DevxyzCode… (e.g. ayusin mo itong bug)") },
+            prefix = { Text("> ", fontFamily = FontFamily.Monospace, color = CcOrange) },
             modifier = Modifier.fillMaxWidth(),
-            maxLines = 4
+            maxLines = 4,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = CcOrange,
+                unfocusedBorderColor = CcBorder,
+                focusedTextColor = CcText,
+                unfocusedTextColor = CcText,
+                cursorColor = CcOrange,
+                focusedLabelColor = CcDim,
+                unfocusedLabelColor = CcDim
+            )
         )
         Spacer(Modifier.height(8.dp))
         Row(
@@ -1403,33 +1550,42 @@ fun AgentScreen(
                     }
                 },
                 modifier = Modifier.weight(1f),
-                enabled = !thinking
-            ) { Text(if (thinking) "Thinking…" else "Send") }
+                enabled = !thinking,
+                colors = ButtonDefaults.buttonColors(containerColor = CcOrange, contentColor = Color(0xFF0F0F0F))
+            ) { Text(if (thinking) "✻ Thinking…" else "Send") }
             // v3.9.1: voice input — system speech recognizer, tap the mic.
             IconButton(onClick = { launchVoiceInput() }, enabled = !thinking) {
-                Icon(Icons.Filled.Mic, contentDescription = "Voice input")
+                Icon(Icons.Filled.Mic, contentDescription = "Voice input", tint = CcDim)
             }
             // v3.7: Stop — cancels the running request (chatJob) so a hung
             // provider can never freeze the Agent.
             if (thinking) {
-                OutlinedButton(onClick = { chatJob?.cancel() }) { Text("Stop") }
+                OutlinedButton(onClick = { chatJob?.cancel() }) { Text("Stop", color = CcText) }
             }
         }
         // v3.8: /compact confirmation — summarising replaces the history,
         // so it needs an explicit tap, never a silent side effect.
         if (pendingCompact) {
             Spacer(Modifier.height(8.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(10.dp)) {
-                    Text("Compact this session?", fontWeight = FontWeight.Bold)
-                    Text(
-                        "The AI summarises the ${history.size} message(s) and the history is replaced by that summary. This cannot be undone.",
-                        fontSize = 13.sp
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { runCompact() }) { Text("Summarise") }
-                        OutlinedButton(onClick = { pendingCompact = false }) { Text("Cancel") }
-                    }
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .background(CcPanel, RoundedCornerShape(8.dp))
+                    .border(1.dp, CcBorder, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("Compact this session?", fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = CcText)
+                Text(
+                    "The AI summarises the ${history.size} message(s) and the history is replaced by that summary. This cannot be undone.",
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = CcDim
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { runCompact() },
+                        colors = ButtonDefaults.buttonColors(containerColor = CcOrange, contentColor = Color(0xFF0F0F0F))
+                    ) { Text("Summarise") }
+                    OutlinedButton(onClick = { pendingCompact = false }) { Text("Cancel", color = CcText) }
                 }
             }
         }
@@ -1438,7 +1594,9 @@ fun AgentScreen(
                 "Multi-file replies become a Plan — review each diff, then Apply all writes the files (new files are created in the picked folder). " +
                 "Attach an image and a vision model reads it with your prompt. " +
                 "Paste a provider setup (e.g. Coarena's 'Copy for your agent') here and the app offers to set itself up — the key never leaves this device.",
-            fontSize = 12.sp
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            color = CcDim
         )
     }
 }
@@ -2885,7 +3043,7 @@ fun SettingsScreen(
             Text(saved, fontSize = 13.sp)
         }
         Spacer(Modifier.height(16.dp))
-        Text("DevxyzCode v3.9.1", fontWeight = FontWeight.Bold)
+        Text("DevxyzCode v3.9.2", fontWeight = FontWeight.Bold)
         Text("Package com.jepongdevxyz.devxyzcode · minSdk 26 · targetSdk 35", fontSize = 13.sp)
         Text(
             "Privacy: your API key, Telegram token, and GitHub token stay encrypted on this device " +
@@ -2895,15 +3053,18 @@ fun SettingsScreen(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "What v3.9.1 adds (pure mobile controls only — tap, long-press, chips; " +
-                "no keyboard, no right-click, no PC): inline AI edit in the Files editor " +
-                "(select text — or nothing for the whole file — describe the change, review " +
-                "the diff, Apply), voice input in the Agent composer (mic button, system " +
-                "speech recogniser) + read-aloud on assistant replies (Listen / Stop), " +
-                "per-hunk accept/reject in the diff preview (each change has its own tap " +
-                "toggle; Apply keeps accepted hunks only), and a notification when an Agent " +
-                "reply finishes while the app is in the background (Settings toggle, " +
-                "default OFF). What it still does NOT do: run gradle / npm / node / python / " +
+            "What v3.9.2 adds — the Agent tab is now Claude Code's UI: a dark " +
+                "terminal transcript (near-black background, monospace text, Claude " +
+                "orange #D97757). Your messages are `>` lines, the Agent's replies " +
+                "are plain text, and every action is a `⏺` tool line (Preview diff, " +
+                "Show plan, Run in Terminal, Copy reply, Save as Skill, Listen). The " +
+                "top is a compact status line (`✻ DevxyzCode · <model>` + the mode " +
+                "line, e.g. `⏸ suggest mode on`), the composer is a bordered box " +
+                "with an orange `>` prompt, and Send is orange. Nothing was removed " +
+                "— modes, context meter, sessions, model chips, effort, diff preview " +
+                "with per-hunk toggles, plan card, voice, and notifications all work " +
+                "exactly as before. The other tabs keep their current look. " +
+                "What it still does NOT do: run gradle / npm / node / python / " +
                 "git on the phone (those binaries do not exist on a phone), cloud agents, " +
                 "worktrees, full LSP servers, or WhatsApp control. Every change still needs " +
                 "your tap, except scheduled tasks you created yourself.",
